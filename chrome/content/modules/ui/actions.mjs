@@ -36,10 +36,46 @@ export function resolveFromSelection(items) {
   return null;
 }
 
-export async function parseAttachment(attachment) {
+export function attachmentDisplayTitle(attachment, manifest = null, maxLength = 88) {
+  let parentTitle = "";
+  let attachmentTitle = "";
+  try {
+    parentTitle = attachment?.parentItemID
+      ? ctx.Zotero.Items.get(attachment.parentItemID)?.getField?.("title") || ""
+      : "";
+    attachmentTitle = attachment?.getField?.("title") || "";
+  } catch {}
+  const title = String(
+    parentTitle
+      || attachmentTitle
+      || manifest?.title
+      || attachment?.attachmentFilename
+      || "PDF"
+  ).replace(/\s+/g, " ").trim();
+  return title.length > maxLength
+    ? `${title.slice(0, Math.max(1, maxLength - 1))}…`
+    : title;
+}
+
+async function existingParsedAttachment(attachment) {
+  const dir = storage.itemDir(attachment);
+  const manifest = await storage.readManifest(attachment);
+  if (!manifest) return null;
+  const blocks = await loadBlocks(dir, manifest);
+  return blocks.length ? { dir, manifest, blocks } : null;
+}
+
+export async function parseAttachment(attachment, { force = false } = {}) {
   return runWithProgress("PaperTranslate 解析 PDF", async (update) => {
+    update("检查已有解析结果…");
+    if (!force) {
+      const existing = await existingParsedAttachment(attachment);
+      if (existing) {
+        return `解析结果已存在：${attachmentDisplayTitle(attachment, existing.manifest)}，未重复解析。`;
+      }
+    }
     const { manifest } = await importAttachment(attachment, { onProgress: update });
-    return `解析完成：${manifest.title}`;
+    return `解析完成：${attachmentDisplayTitle(attachment, manifest)}`;
   });
 }
 
@@ -47,7 +83,7 @@ export async function translateAttachment(attachment, { force = false } = {}) {
   return runWithProgress("PaperTranslate 翻译全文", async (update) => {
     const dir = storage.itemDir(attachment);
     const manifest = await storage.readManifest(attachment);
-    if (!manifest) throw new Error("尚未解析，请先执行“用 MinerU 解析 PDF”。");
+    if (!manifest) throw new Error("尚未解析，请先执行“解析 PDF”。");
     const blocks = await loadBlocks(dir, manifest);
     if (!blocks.length) throw new Error("没有可翻译的内容块。");
 
@@ -59,6 +95,41 @@ export async function translateAttachment(attachment, { force = false } = {}) {
       onChunk: (cache, done, total) => update(`翻译中… ${done}/${total} 段`)
     });
     return `翻译完成，本次 ${result.translated} 段，缓存共 ${Object.keys(result.translations).length} 段。`;
+  });
+}
+
+export async function parseAndTranslateAttachment(attachment, { force = false } = {}) {
+  return runWithProgress("PaperTranslate 解析并翻译全文", async (update) => {
+    update("检查已有解析结果…");
+    let project = await existingParsedAttachment(attachment);
+    const reusedParsing = Boolean(project);
+    if (project) {
+      update("解析结果已存在，跳过重复解析并检查译文…");
+    } else {
+      const { dir, manifest } = await importAttachment(attachment, {
+        onProgress: (text) => update(`解析：${text}`)
+      });
+      const blocks = await loadBlocks(dir, manifest);
+      project = { dir, manifest, blocks };
+      update("解析完成，准备翻译全文…");
+    }
+
+    const { dir, manifest, blocks } = project;
+    if (!blocks.length) throw new Error("解析完成，但没有可翻译的内容块。");
+
+    const service = new TranslationService();
+    const result = await service.translateBlocks({
+      dir,
+      allBlocks: blocks,
+      force,
+      onChunk: (cache, done, total) => update(`翻译中… ${done}/${total} 段`)
+    });
+    if (!result.translated) {
+      return reusedParsing
+        ? `解析结果已存在：${attachmentDisplayTitle(attachment, manifest)}；没有需要新增翻译的内容。`
+        : `解析完成：${attachmentDisplayTitle(attachment, manifest)}；没有需要翻译的内容。`;
+    }
+    return `解析并翻译完成：${attachmentDisplayTitle(attachment, manifest)}；本次翻译 ${result.translated} 段。`;
   });
 }
 

@@ -141,7 +141,14 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
   const manifest = {
     version: 1,
     attachmentKey: item.key,
-    title: title || fileName.replace(/\.pdf$/i, ""),
+    // MinerU 偶尔会把首页版权或授权声明误标为 title。Zotero 条目标题
+    // 由用户元数据确定，可靠性更高，因此优先写入解析清单。
+    title: cleanTitle(
+      (item.parentItemID
+        ? ctx.Zotero.Items.get(item.parentItemID)?.getField?.("title")
+        : item.getField?.("title")),
+      ""
+    ) || title || fileName.replace(/\.pdf$/i, ""),
     fileName,
     provider: "mineru",
     model: config.mineru.modelVersion,

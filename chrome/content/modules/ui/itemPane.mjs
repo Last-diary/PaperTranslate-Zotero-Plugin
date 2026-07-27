@@ -2,7 +2,13 @@
 // 显示当前条目 PDF 的解析/翻译状态，并提供操作按钮。
 
 import { ctx } from "../context.mjs";
-import { resolvePdfAttachment, parseAttachment, translateAttachment, openInReader } from "./actions.mjs";
+import {
+  resolvePdfAttachment,
+  attachmentDisplayTitle,
+  parseAttachment,
+  translateAttachment,
+  openInReader
+} from "./actions.mjs";
 import * as storage from "../storage.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -56,7 +62,7 @@ async function renderSection(body, item) {
   status.style.cssText = "line-height:1.5; word-break:break-all;";
   if (manifest) {
     const date = manifest.createdAt ? manifest.createdAt.slice(0, 10) : "";
-    status.textContent = `已解析：${manifest.title || attachment.attachmentFilename}`
+    status.textContent = `已解析：${attachmentDisplayTitle(attachment, manifest, 120)}`
       + `（${manifest.pageCount || "?"} 页 / ${manifest.blockCount || "?"} 块，译文 ${translationCount} 段，${date}）`;
   } else {
     status.textContent = "尚未用 MinerU 解析此 PDF。";
@@ -68,7 +74,7 @@ async function renderSection(body, item) {
   row.style.gap = "6px";
 
   const parseButton = makeButton(doc, manifest ? "重新解析" : "解析 PDF", async () => {
-    await parseAttachment(attachment);
+    await parseAttachment(attachment, { force: Boolean(manifest) });
     await renderSection(body, item);
   });
   const translateButton = makeButton(doc, "翻译全文", async () => {

@@ -17,7 +17,11 @@ import { READER_PANEL_CSS } from "../readerPanelStyles.mjs";
 
 const PANEL_ID = "papertranslate-panel";
 const RESIZER_ID = "papertranslate-resizer";
+const WORKSPACE_ID = "papertranslate-workspace";
+const PANEL_OPEN_CLASS = "papertranslate-panel-open";
+const PANEL_OCCUPIED_WIDTH_VAR = "--papertranslate-panel-occupied-width";
 const DEFAULT_WIDTH = 440;
+const DEFAULT_WIDTH_RATIO = 0.4;
 const MIN_WIDTH = 280;
 const AUTO_TRANSLATE_DEBOUNCE_MS = 300;
 const AUTO_TRANSLATE_PREFETCH_PX = 160;
@@ -492,11 +496,99 @@ function buildPanelShell(doc) {
   };
 }
 
-// 并排布局：把分隔条和面板插入 #split-view，挤压 PDF 主视图
+function updateOuterLayoutMetrics(state) {
+  if (!state.workspace || !state.splitView) return;
+  const occupiedWidth = Math.max(
+    0,
+    state.workspace.getBoundingClientRect().width
+      - state.splitView.getBoundingClientRect().width
+  );
+  state.doc.documentElement.style.setProperty(
+    PANEL_OCCUPIED_WIDTH_VAR,
+    `${Math.ceil(occupiedWidth)}px`
+  );
+}
+
+function setPanelWidth(state, width) {
+  const roundedWidth = Math.round(width);
+  state.els.root.style.width = `${roundedWidth}px`;
+  state.els.root.style.flexBasis = `${roundedWidth}px`;
+  state.els.root.classList.toggle("pt-compact", roundedWidth < 360);
+  updateOuterLayoutMetrics(state);
+}
+
+function resizePanelToWorkspace(state) {
+  if (!state.workspace || state.disposed) return;
+  const workspaceWidth = state.workspace.clientWidth || state.win.innerWidth;
+  if (!workspaceWidth) return;
+  const ratio = state.panelWidthRatio || DEFAULT_WIDTH_RATIO;
+  const maxWidth = Math.max(MIN_WIDTH, workspaceWidth - 320);
+  setPanelWidth(
+    state,
+    Math.min(maxWidth, Math.max(MIN_WIDTH, workspaceWidth * ratio))
+  );
+}
+
+function applyNativePdfAutoZoom(state) {
+  if (state.disposed) return;
+  const internalReader = state.reader?._internalReader;
+  if (!internalReader) return;
+
+  // Zotero 的公开 zoomAuto() 只作用于当前活动视图；原生双视图开启时，
+  // 同时设置两个 PDF view，保证左右 PDF 都使用“自动调整大小”。
+  const views = [
+    internalReader._primaryView,
+    internalReader._secondaryView
+  ].filter(Boolean);
+  if (views.length) {
+    for (const view of views) {
+      try {
+        view.zoomAuto?.();
+        // PDF.js 监听的是每个 PDF iframe 自己的 resize，而不是外层
+        // Zotero Reader 窗口。主动通知内层窗口，立即按新的容器宽度重算。
+        const viewerWindow = view._iframeWindow?.wrappedJSObject || view._iframeWindow;
+        viewerWindow?.dispatchEvent(new viewerWindow.Event("resize"));
+      } catch {}
+    }
+  } else {
+    try {
+      internalReader.zoomAuto?.();
+    } catch {}
+  }
+}
+
+function scheduleNativePdfAutoZoom(state) {
+  if (state.pdfAutoZoomTimer) {
+    state.win.clearTimeout(state.pdfAutoZoomTimer);
+    state.pdfAutoZoomTimer = null;
+  }
+  // 等外层 flex 布局完成两帧后再切换原生缩放模式，避免 PDF.js
+  // 根据面板打开前的旧容器宽度计算缩放比例。
+  state.win.requestAnimationFrame(() => {
+    state.win.requestAnimationFrame(() => {
+      if (state.disposed) return;
+      updateOuterLayoutMetrics(state);
+      try {
+        state.win.dispatchEvent(new state.win.Event("resize"));
+      } catch {}
+      applyNativePdfAutoZoom(state);
+      // Zotero 的原生拆分视图还可能在下一轮 React 布局中更新 iframe，
+      // 稍后再校正一次，确保面板刚打开时即可完成自动适配。
+      state.pdfAutoZoomTimer = state.win.setTimeout(() => {
+        state.pdfAutoZoomTimer = null;
+        applyNativePdfAutoZoom(state);
+      }, 120);
+    });
+  });
+}
+
+// 外层并排布局：#split-view 保持为完整的 PDF 双视图单元，
+// PaperTranslate 面板作为其外层同级项，不再参与 Zotero 原生拆分排列。
 function attachSideBySide(state) {
   const doc = state.doc;
   const splitView = doc.getElementById("split-view");
   const primaryView = doc.getElementById("primary-view");
+  const secondaryView = doc.getElementById("secondary-view");
   if (!splitView || !primaryView) {
     // 结构不符时回退为固定定位浮层（不影响功能）
     state.els.root.style.cssText += ";position:fixed;top:0;right:0;bottom:0;z-index:1000;box-shadow:-3px 0 10px rgba(0,0,0,.25);";
@@ -504,6 +596,18 @@ function attachSideBySide(state) {
     state.layoutMode = "overlay";
     return;
   }
+
+  const originalParent = splitView.parentNode;
+  const originalNextSibling = splitView.nextSibling;
+  if (!originalParent) {
+    state.els.root.style.cssText += ";position:fixed;top:0;right:0;bottom:0;z-index:1000;box-shadow:-3px 0 10px rgba(0,0,0,.25);";
+    doc.body.appendChild(state.els.root);
+    state.layoutMode = "overlay";
+    return;
+  }
+
+  const workspace = el(doc, "div");
+  workspace.id = WORKSPACE_ID;
 
   const resizer = el(doc, "div");
   resizer.className = "pt-pane-resize-handle";
@@ -535,10 +639,11 @@ function attachSideBySide(state) {
     const onMove = (ev) => {
       if (ev.pointerId !== pointerId) return;
       ev.preventDefault();
-      const maxWidth = Math.max(MIN_WIDTH, Math.round(splitView.clientWidth * 0.7));
+      const workspaceWidth = state.workspace?.clientWidth || state.win.innerWidth;
+      const maxWidth = Math.max(MIN_WIDTH, Math.round(workspaceWidth - 320));
       const width = Math.min(maxWidth, Math.max(MIN_WIDTH, startWidth + (startX - ev.clientX)));
-      state.els.root.style.width = `${width}px`;
-      state.els.root.style.flexBasis = `${width}px`;
+      setPanelWidth(state, width);
+      state.panelWidthRatio = workspaceWidth ? width / workspaceWidth : null;
       lastWidth = width;
     };
 
@@ -555,10 +660,8 @@ function attachSideBySide(state) {
       doc.documentElement.style.userSelect = previousUserSelect;
       resizer.style.background = "transparent";
       state.resizeCleanup = null;
-      // 让 Zotero Reader 完成一次最终重排。
-      try {
-        state.win.dispatchEvent(new state.win.Event("resize"));
-      } catch {}
+      // 使用 Zotero 原生“自动调整大小”按最终 PDF 区域宽度重排。
+      scheduleNativePdfAutoZoom(state);
     };
 
     state.resizeCleanup = finishDrag;
@@ -567,19 +670,47 @@ function attachSideBySide(state) {
     state.win.addEventListener("pointercancel", finishDrag, true);
   });
 
-  // primary-view 默认 flex-grow:1，加入固定宽度兄弟节点后会自动收缩；
-  // min-width:auto 可能导致不收缩，显式置 0
-  state.layoutBackup = { primaryMinWidth: primaryView.style.minWidth };
-  primaryView.style.minWidth = "0";
-  splitView.appendChild(resizer);
-  splitView.appendChild(state.els.root);
-  state.resizer = resizer;
-  state.layoutMode = "side-by-side";
+  state.layoutBackup = {
+    originalParent,
+    originalNextSibling,
+    splitStyle: splitView.getAttribute("style"),
+    primaryMinWidth: primaryView.style.minWidth,
+    secondaryMinWidth: secondaryView?.style.minWidth || "",
+    panelOpenClassExisted: doc.body.classList.contains(PANEL_OPEN_CLASS),
+    occupiedWidth: doc.documentElement.style.getPropertyValue(PANEL_OCCUPIED_WIDTH_VAR)
+  };
 
-  // 触发一次 resize，促使 pdf.js 立即按新尺寸重排
-  try {
-    state.win.dispatchEvent(new state.win.Event("resize"));
-  } catch {}
+  originalParent.insertBefore(workspace, splitView);
+  workspace.append(splitView, resizer, state.els.root);
+  splitView.style.setProperty("position", "relative", "important");
+  splitView.style.setProperty("inset", "auto", "important");
+  splitView.style.setProperty("inset-inline-start", "auto", "important");
+  splitView.style.setProperty("inset-inline-end", "auto", "important");
+  splitView.style.setProperty("top", "auto", "important");
+  splitView.style.setProperty("bottom", "auto", "important");
+  splitView.style.setProperty("min-width", "0", "important");
+  splitView.style.setProperty("width", "auto", "important");
+  splitView.style.setProperty("height", "100%", "important");
+  splitView.style.setProperty("flex", "1 1 auto", "important");
+  primaryView.style.minWidth = "0";
+  if (secondaryView) secondaryView.style.minWidth = "0";
+
+  const workspaceWidth = workspace.clientWidth || state.win.innerWidth;
+  const maxInitialWidth = Math.max(MIN_WIDTH, workspaceWidth - 320);
+  const initialWidth = Math.min(
+    maxInitialWidth,
+    Math.max(MIN_WIDTH, workspaceWidth * DEFAULT_WIDTH_RATIO)
+  );
+  state.panelWidthRatio = DEFAULT_WIDTH_RATIO;
+
+  doc.body.classList.add(PANEL_OPEN_CLASS);
+  state.workspace = workspace;
+  state.splitView = splitView;
+  state.resizer = resizer;
+  state.layoutMode = "outer-side-by-side";
+  setPanelWidth(state, initialWidth);
+
+  scheduleNativePdfAutoZoom(state);
 }
 
 function detachPanel(state) {
@@ -591,19 +722,56 @@ function detachPanel(state) {
     state.win.clearTimeout(state.autoTranslateTimer);
     state.autoTranslateTimer = null;
   }
+  if (state.pdfAutoZoomTimer) {
+    state.win.clearTimeout(state.pdfAutoZoomTimer);
+    state.pdfAutoZoomTimer = null;
+  }
   state.autoTranslateQueued.clear();
   state.eventCleanup?.();
   state.eventCleanup = null;
   state.resizeCleanup?.();
   state.resizeCleanup = null;
-  if (state.layoutMode === "side-by-side") {
+  if (state.layoutMode === "outer-side-by-side") {
     const primaryView = doc.getElementById("primary-view");
+    const secondaryView = doc.getElementById("secondary-view");
     if (primaryView && state.layoutBackup) {
       primaryView.style.minWidth = state.layoutBackup.primaryMinWidth || "";
+    }
+    if (secondaryView && state.layoutBackup) {
+      secondaryView.style.minWidth = state.layoutBackup.secondaryMinWidth || "";
+    }
+    const splitView = state.splitView || doc.getElementById("split-view");
+    const backup = state.layoutBackup;
+    if (splitView && backup?.originalParent) {
+      const nextSibling = backup.originalNextSibling;
+      if (nextSibling?.parentNode === backup.originalParent) {
+        backup.originalParent.insertBefore(splitView, nextSibling);
+      } else {
+        backup.originalParent.appendChild(splitView);
+      }
+      if (backup.splitStyle === null) {
+        splitView.removeAttribute("style");
+      } else {
+        splitView.setAttribute("style", backup.splitStyle);
+      }
+    }
+    if (!state.layoutBackup?.panelOpenClassExisted) {
+      doc.body.classList.remove(PANEL_OPEN_CLASS);
+    }
+    if (state.layoutBackup?.occupiedWidth) {
+      doc.documentElement.style.setProperty(
+        PANEL_OCCUPIED_WIDTH_VAR,
+        state.layoutBackup.occupiedWidth
+      );
+    } else {
+      doc.documentElement.style.removeProperty(PANEL_OCCUPIED_WIDTH_VAR);
     }
   }
   state.resizer?.remove();
   state.els.root.remove();
+  state.workspace?.remove();
+  state.workspace = null;
+  state.splitView = null;
   try {
     state.win.dispatchEvent(new state.win.Event("resize"));
   } catch {}
@@ -1275,15 +1443,73 @@ function attachPanelEvents(state) {
 
   const onScroll = () => scheduleVisibleTranslation(state);
   els.body.addEventListener("scroll", onScroll, { passive: true });
+  const onWindowResize = () => resizePanelToWorkspace(state);
+  state.win.addEventListener("resize", onWindowResize);
+  const workspaceResizeObserver = state.win.ResizeObserver && state.workspace
+    ? new state.win.ResizeObserver(() => resizePanelToWorkspace(state))
+    : null;
+  workspaceResizeObserver?.observe(state.workspace);
   state.eventCleanup = () => {
     els.body.removeEventListener("scroll", onScroll);
+    state.win.removeEventListener("resize", onWindowResize);
+    workspaceResizeObserver?.disconnect();
   };
+}
+
+function pdfPointFromViewContextEvent(event) {
+  const params = event.params;
+  const internalReader = event.reader?._internalReader;
+  const view = internalReader?._lastView;
+  const frame = view?._iframe;
+  const viewerWindow = view?._iframeWindow?.wrappedJSObject || view?._iframeWindow;
+  const doc = viewerWindow?.document;
+  const menuX = Number(params?.x);
+  const menuY = Number(params?.y);
+  if (!frame || !doc || !Number.isFinite(menuX) || !Number.isFinite(menuY)) {
+    return null;
+  }
+
+  try {
+    const frameRect = frame.getBoundingClientRect();
+    const clientX = menuX - frameRect.left;
+    const clientY = menuY - frameRect.top;
+    let page = doc.elementFromPoint(clientX, clientY)?.closest?.(".page");
+    if (!page) {
+      page = Array.from(doc.querySelectorAll(".page")).find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return clientX >= rect.left
+          && clientX <= rect.right
+          && clientY >= rect.top
+          && clientY <= rect.bottom;
+      });
+    }
+    if (!page) return null;
+
+    const pageNumber = Number(
+      page.dataset?.pageNumber || page.getAttribute?.("data-page-number")
+    );
+    const rect = page.getBoundingClientRect();
+    if (!Number.isFinite(pageNumber) || pageNumber < 1 || !rect.width || !rect.height) {
+      return null;
+    }
+    return {
+      pageIdx: pageNumber - 1,
+      xRatio: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+      yRatio: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
+    };
+  } catch {
+    return null;
+  }
 }
 
 function appendPdfViewContextCommand(event) {
   const state = panelStates.get(event.reader?._iframeWindow);
   if (!state || state.disposed || !state.blocks.length) return;
-  const block = blockAtPdfPoint(state, state.pdfContextPoint);
+  // createViewContextMenu 已携带本次点击坐标。直接从当前活动 PDF view
+  // 解析坐标，避免 iframe 重建或原生双视图切换后使用过期的桥接状态。
+  const currentPoint = pdfPointFromViewContextEvent(event);
+  if (event.params) state.pdfContextPoint = currentPoint;
+  const block = blockAtPdfPoint(state, currentPoint || state.pdfContextPoint);
   event.append({
     label: "在右侧内容中定位",
     disabled: !block,
@@ -1291,6 +1517,33 @@ function appendPdfViewContextCommand(event) {
       locatePdfContextInPanel(state, block);
     }
   });
+}
+
+function removeOrphanedPanelLayout(doc) {
+  const workspace = doc.getElementById(WORKSPACE_ID);
+  const splitView = doc.getElementById("split-view");
+  if (workspace && splitView && workspace.contains(splitView) && workspace.parentNode) {
+    workspace.parentNode.insertBefore(splitView, workspace);
+    for (const property of [
+      "position",
+      "inset",
+      "inset-inline-start",
+      "inset-inline-end",
+      "top",
+      "bottom",
+      "min-width",
+      "width",
+      "height",
+      "flex"
+    ]) {
+      splitView.style.removeProperty(property);
+    }
+  }
+  workspace?.remove();
+  doc.getElementById(RESIZER_ID)?.remove();
+  doc.getElementById(PANEL_ID)?.remove();
+  doc.body.classList.remove(PANEL_OPEN_CLASS);
+  doc.documentElement.style.removeProperty(PANEL_OCCUPIED_WIDTH_VAR);
 }
 
 async function togglePanel(reader) {
@@ -1303,8 +1556,7 @@ async function togglePanel(reader) {
     if (state) {
       detachPanel(state);
     } else {
-      existing.remove();
-      doc.getElementById(RESIZER_ID)?.remove();
+      removeOrphanedPanelLayout(doc);
     }
     panelStates.delete(win);
     return;
@@ -1326,6 +1578,9 @@ async function togglePanel(reader) {
     attachment: null,
     layoutMode: "",
     layoutBackup: null,
+    workspace: null,
+    splitView: null,
+    panelWidthRatio: null,
     resizer: null,
     resizeCleanup: null,
     imageSources: new Map(),
@@ -1342,6 +1597,7 @@ async function togglePanel(reader) {
     pdfContextContainer: null,
     pdfContextHandler: null,
     pdfContextPoint: null,
+    pdfAutoZoomTimer: null,
     pdfHighlightAttemptTimer: null,
     pdfCenterTimer: null,
     pdfHighlightNode: null

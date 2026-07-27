@@ -5,7 +5,7 @@ import { ctx } from "../context.mjs";
 // fn(updateStatus) 中的异步操作期间显示进度；异常会以错误行展示并延迟关闭。
 export async function runWithProgress(title, fn) {
   const { Zotero } = ctx;
-  const pw = new Zotero.ProgressWindow({ closeOnClick: false });
+  const pw = new Zotero.ProgressWindow({ closeOnClick: true });
   pw.changeHeadline(title);
   pw.show();
   const line = new pw.ItemProgress("", "准备中…");
@@ -16,14 +16,26 @@ export async function runWithProgress(title, fn) {
       // 进度窗已关闭等情况可忽略
     }
   };
+  const closeLater = (delay) => {
+    try {
+      pw.startCloseTimer(delay);
+    } catch {}
+    // Zotero 自带的关闭计时器会在鼠标悬停时暂停。增加一个不受悬停
+    // 影响的兜底计时，确保通知最终一定关闭。
+    setTimeout(() => {
+      try {
+        pw.close();
+      } catch {}
+    }, delay + 250);
+  };
 
   try {
     const result = await fn(update);
-    update("完成");
+    update(typeof result === "string" && result.trim() ? result : "完成");
     try {
       line.setProgress(100);
     } catch {}
-    pw.startCloseTimer(3000);
+    closeLater(4500);
     return result;
   } catch (error) {
     Zotero.logError(error);
@@ -31,7 +43,7 @@ export async function runWithProgress(title, fn) {
       line.setError();
       line.setText(error.message || String(error));
     } catch {}
-    pw.startCloseTimer(10000);
+    closeLater(9000);
     return null;
   }
 }

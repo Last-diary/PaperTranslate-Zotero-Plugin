@@ -11,11 +11,39 @@ export const READER_PANEL_CSS = String.raw`
   font:13px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif !important;
 }
 .pt-reader-panel,.pt-reader-panel * { box-sizing:border-box; }
+#papertranslate-workspace {
+  position:absolute;
+  inset-inline-start:0;
+  inset-inline-end:0;
+  top:41px;
+  bottom:var(--bottom-placeholder-height);
+  display:flex;
+  min-width:0;
+  overflow:hidden;
+}
+body.sidebar-open #papertranslate-workspace {
+  inset-inline-start:var(--sidebar-width);
+}
+#papertranslate-workspace > #split-view {
+  position:relative !important;
+  inset:auto !important;
+  top:auto !important;
+  bottom:auto !important;
+  min-width:0 !important;
+  width:auto !important;
+  height:100% !important;
+  flex:1 1 auto !important;
+}
+body.papertranslate-panel-open #reader-ui .split-view {
+  inset-inline-end:var(--papertranslate-panel-occupied-width) !important;
+}
 .pt-toolbar {
   min-height:44px; flex:none; display:flex; align-items:center; justify-content:flex-end;
-  gap:10px; padding:8px 10px; border-bottom:1px solid var(--pt-line); background:#fff;
+  flex-wrap:wrap; gap:10px; padding:8px 10px; border-bottom:1px solid var(--pt-line); background:#fff;
 }
-.pt-controls { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+.pt-controls {
+  min-width:0; display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px;
+}
 .pt-reader-panel .pt-button {
   min-height:28px; margin:0; padding:5px 9px; border:1px solid var(--pt-line);
   border-radius:8px; background:#fff; color:var(--pt-ink); font:inherit;
@@ -45,6 +73,17 @@ export const READER_PANEL_CSS = String.raw`
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .pt-pane-actions { flex:none; display:flex; align-items:center; gap:8px; white-space:nowrap; }
+.pt-reader-panel.pt-compact .pt-toolbar { gap:4px; padding:6px; }
+.pt-reader-panel.pt-compact .pt-controls { width:100%; gap:4px; }
+.pt-reader-panel.pt-compact .pt-button { padding-inline:7px; }
+.pt-reader-panel.pt-compact .pt-pane-head { padding-inline:8px; }
+.pt-reader-panel.pt-compact .pt-pane-head>span:first-child { display:none; }
+.pt-reader-panel.pt-compact .pt-pane-actions { margin-inline-start:auto; }
+.pt-reader-panel.pt-compact .pt-markdown-view {
+  padding-inline:10px;
+  font-size:13px;
+}
+.pt-reader-panel.pt-compact .pt-block { padding-inline:7px; }
 .pt-content {
   flex:1; min-width:0; min-height:0; display:grid;
   grid-template-columns:168px minmax(0,1fr); background:#fff;

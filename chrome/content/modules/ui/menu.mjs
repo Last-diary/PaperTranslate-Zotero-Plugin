@@ -1,7 +1,11 @@
 // 条目右键菜单：Zotero 8+ 用官方 MenuManager API，Zotero 7 回退到 DOM 注入。
 
 import { ctx } from "../context.mjs";
-import { resolveFromSelection, parseAttachment, translateAttachment, openInReader } from "./actions.mjs";
+import {
+  resolveFromSelection,
+  parseAttachment,
+  parseAndTranslateAttachment
+} from "./actions.mjs";
 
 const menuIDs = [];
 const fallbackMenus = new Map();
@@ -16,20 +20,23 @@ const COMMANDS = {
     const attachment = selectedPdfAttachment();
     if (attachment) parseAttachment(attachment);
   },
-  translate() {
+  parseAndTranslate() {
     const attachment = selectedPdfAttachment();
-    if (attachment) translateAttachment(attachment);
-  },
-  open() {
-    const attachment = selectedPdfAttachment();
-    if (attachment) openInReader(attachment);
+    if (attachment) parseAndTranslateAttachment(attachment);
   }
 };
 
 const MENU_DEFS = [
-  ["papertranslate-menu-parse", COMMANDS.parse],
-  ["papertranslate-menu-translate", COMMANDS.translate],
-  ["papertranslate-menu-open", COMMANDS.open]
+  {
+    l10nID: "papertranslate-menu-parse",
+    icon: "icons/parse-16.svg",
+    onCommand: COMMANDS.parse
+  },
+  {
+    l10nID: "papertranslate-menu-parse-and-translate",
+    icon: "icons/parse-translate-16.svg",
+    onCommand: COMMANDS.parseAndTranslate
+  }
 ];
 
 // 返回 false 表示当前 Zotero 版本需要 DOM 注入回退
@@ -41,9 +48,10 @@ export function registerMenus(pluginID) {
     menuID: "papertranslate",
     pluginID,
     target: "main/library/item",
-    menus: MENU_DEFS.map(([l10nID, onCommand]) => ({
+    menus: MENU_DEFS.map(({ l10nID, icon, onCommand }) => ({
       menuType: "menuitem",
       l10nID,
+      icon: ctx.rootURI + icon,
       onShowing: (event, context) => context.setVisible(Boolean(selectedPdfAttachment())),
       onCommand
     }))
@@ -64,11 +72,12 @@ export function installFallbackMenu(window) {
   popup.appendChild(separator);
   nodes.push(separator);
 
-  for (const [l10nId, handler] of MENU_DEFS) {
+  for (const { l10nID, icon, onCommand } of MENU_DEFS) {
     const item = doc.createXULElement("menuitem");
-    item.setAttribute("data-l10n-id", l10nId);
-    item.classList.add("papertranslate-menuitem");
-    item.addEventListener("command", handler);
+    item.setAttribute("data-l10n-id", l10nID);
+    item.setAttribute("image", ctx.rootURI + icon);
+    item.classList.add("papertranslate-menuitem", "menuitem-iconic");
+    item.addEventListener("command", onCommand);
     popup.appendChild(item);
     nodes.push(item);
   }
