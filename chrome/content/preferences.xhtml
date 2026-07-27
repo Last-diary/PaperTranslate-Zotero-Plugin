@@ -1,0 +1,131 @@
+<vbox xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml">
+
+  <groupbox>
+    <label><html:h2>DeepSeek</html:h2></label>
+    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:span style="min-width:110px;">API Key</html:span>
+        <html:input type="password" style="flex:1;" autocomplete="off" placeholder="sk-..."
+                    preference="extensions.papertranslate.deepseek.apiKey"/>
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:span style="min-width:110px;">Base URL</html:span>
+        <html:input type="text" style="flex:1;" placeholder="https://api.deepseek.com"
+                    preference="extensions.papertranslate.deepseek.baseUrl"/>
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:span style="min-width:110px;">模型</html:span>
+        <html:input type="text" style="flex:1;" placeholder="deepseek-v4-flash"
+                    preference="extensions.papertranslate.deepseek.model"/>
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.deepseek.thinkingEnabled"/>
+        启用思考模式（翻译建议关闭，避免额外推理耗时）
+      </html:label>
+      <html:div style="display:flex; align-items:center; gap:10px;">
+        <html:button id="papertranslate-test-deepseek">测试 DeepSeek</html:button>
+        <html:span id="papertranslate-test-deepseek-status" style="opacity:.8;"></html:span>
+      </html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>MinerU</html:h2></label>
+    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:span style="min-width:110px;">API Token</html:span>
+        <html:input type="password" style="flex:1;" autocomplete="off"
+                    preference="extensions.papertranslate.mineru.apiKey"/>
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:span style="min-width:110px;">Base URL</html:span>
+        <html:input type="text" style="flex:1;" placeholder="https://mineru.net/api/v4"
+                    preference="extensions.papertranslate.mineru.baseUrl"/>
+      </html:label>
+      <html:div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          模型版本
+          <html:input type="text" style="width:80px;" placeholder="vlm"
+                      preference="extensions.papertranslate.mineru.modelVersion"/>
+        </html:label>
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          语言
+          <html:input type="text" style="width:60px;" placeholder="ch"
+                      preference="extensions.papertranslate.mineru.language"/>
+        </html:label>
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          轮询间隔 ms
+          <html:input type="number" style="width:90px;" min="1000" step="500"
+                      preference="extensions.papertranslate.mineru.pollIntervalMs"/>
+        </html:label>
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          超时 ms
+          <html:input type="number" style="width:110px;" min="30000" step="10000"
+                      preference="extensions.papertranslate.mineru.timeoutMs"/>
+        </html:label>
+      </html:div>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.mineru.isOcr"/>
+        对扫描件启用 OCR
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.mineru.enableFormula"/>
+        启用公式识别
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.mineru.enableTable"/>
+        启用表格识别
+      </html:label>
+      <html:div style="display:flex; align-items:center; gap:10px;">
+        <html:button id="papertranslate-test-mineru">测试 MinerU</html:button>
+        <html:span id="papertranslate-test-mineru-status" style="opacity:.8;"></html:span>
+      </html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>翻译</html:h2></label>
+    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateAuthors"/>
+        翻译作者名单（默认跳过标题与摘要之间的作者、机构、邮箱信息）
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateReferences"/>
+        翻译引用章节（默认跳过 References、Bibliography 等章节）
+      </html:label>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateSupplement"/>
+        翻译补充材料（默认跳过 Supplementary Materials、Appendix 等章节）
+      </html:label>
+    </html:div>
+  </groupbox>
+
+  <groupbox hidden="true">
+    <label><html:h2>目录增强</html:h2></label>
+    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.toc.enabled"/>
+        对 PDF 中没有可靠目录的论文使用 DeepSeek 目录增强
+      </html:label>
+      <html:div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          最少标题数
+          <html:input type="number" style="width:70px;" min="0" step="1"
+                      preference="extensions.papertranslate.toc.minHeadings"/>
+        </html:label>
+        <html:label style="display:flex; align-items:center; gap:6px;">
+          最多标题数
+          <html:input type="number" style="width:80px;" min="1" step="1"
+                      preference="extensions.papertranslate.toc.maxHeadings"/>
+        </html:label>
+      </html:div>
+      <html:label style="display:flex; align-items:center; gap:8px;">
+        <html:input type="checkbox" preference="extensions.papertranslate.toc.forceRefresh"/>
+        强制刷新目录增强（忽略已有缓存）
+      </html:label>
+    </html:div>
+  </groupbox>
+
+</vbox>

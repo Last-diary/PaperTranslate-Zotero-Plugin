@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "PaperTranslate",
+  "version": "0.3.7",
+  "description": "MinerU 解析 + DeepSeek 翻译：在 Zotero Reader 中为 PDF 提供重排译文面板。",
+  "author": "PaperTranslate",
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "papertranslate@papertranslate.dev",
+      "update_url": "https://example.com/papertranslate-zotero/updates.json",
+      "strict_min_version": "7.0.0",
+      "strict_max_version": "9.0.*"
+    }
+  }
+}
