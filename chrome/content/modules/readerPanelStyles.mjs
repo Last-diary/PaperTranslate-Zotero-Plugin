@@ -4,7 +4,7 @@ export const READER_PANEL_CSS = String.raw`
 .pt-reader-panel {
   --pt-panel:#fff; --pt-ink:#1f2933; --pt-muted:#64717f; --pt-line:#d9dee5;
   --pt-accent:#2563eb; --pt-accent-soft:#dbeafe; --pt-select:#eaf4ff; --pt-danger:#b42318;
-  min-width:280px !important; height:100% !important; display:flex !important;
+  position:relative; min-width:280px !important; height:100% !important; display:flex !important;
   flex-direction:column !important; overflow:hidden !important;
   border-left:1px solid var(--pt-line) !important; background:var(--pt-panel) !important;
   color:var(--pt-ink) !important;
@@ -13,27 +13,16 @@ export const READER_PANEL_CSS = String.raw`
 .pt-reader-panel,.pt-reader-panel * { box-sizing:border-box; }
 #papertranslate-workspace {
   position:absolute;
-  inset-inline-start:0;
+  inset-inline-start:auto;
   inset-inline-end:0;
   top:41px;
   bottom:var(--bottom-placeholder-height);
   display:flex;
   min-width:0;
   overflow:hidden;
+  z-index:1;
 }
-body.sidebar-open #papertranslate-workspace {
-  inset-inline-start:var(--sidebar-width);
-}
-#papertranslate-workspace > #split-view {
-  position:relative !important;
-  inset:auto !important;
-  top:auto !important;
-  bottom:auto !important;
-  min-width:0 !important;
-  width:auto !important;
-  height:100% !important;
-  flex:1 1 auto !important;
-}
+body.papertranslate-panel-open #split-view,
 body.papertranslate-panel-open #reader-ui .split-view {
   inset-inline-end:var(--papertranslate-panel-occupied-width) !important;
 }
@@ -144,6 +133,43 @@ body.papertranslate-panel-open #reader-ui .split-view {
 @keyframes pt-translation-mask-sweep {
   to { background-position:-120% 0, 0 0; }
 }
+.pt-block-context-menu {
+  position:absolute; z-index:1000; min-width:168px; padding:5px;
+  border:1px solid var(--pt-line); border-radius:9px; background:var(--pt-panel);
+  box-shadow:0 10px 28px rgba(15,23,42,.18);
+}
+.pt-block-context-menu[hidden] { display:none !important; }
+.pt-reader-panel .pt-block-context-menu button {
+  display:block; width:100%; margin:0; padding:7px 10px; border:0; border-radius:6px;
+  background:transparent; color:var(--pt-ink); font:inherit; font-size:12px;
+  line-height:1.35; text-align:left; white-space:nowrap; cursor:pointer;
+}
+.pt-reader-panel .pt-block-context-menu button:hover { background:var(--pt-accent-soft); }
+.pt-reader-panel .pt-block-context-menu button:disabled {
+  background:transparent; color:var(--pt-muted); cursor:default; opacity:.55;
+}
+.pt-block-context-menu .pt-menu-separator {
+  height:1px; margin:4px 5px; background:var(--pt-line);
+}
+.pt-block.pt-editing { cursor:default; }
+.pt-block-editor { display:flex; flex-direction:column; gap:8px; }
+.pt-block-editor-input {
+  width:100%; min-height:150px; resize:vertical; padding:9px 10px;
+  border:1px solid #93c5fd; border-radius:7px; outline:none;
+  box-sizing:border-box; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
+  background:#fff; color:var(--pt-ink); font:inherit; line-height:1.65; cursor:text;
+}
+.pt-block-editor-input:focus { box-shadow:0 0 0 2px rgba(37,99,235,.14); }
+.pt-block-editor-actions { display:flex; justify-content:flex-end; gap:7px; }
+.pt-reader-panel .pt-block-editor-actions button {
+  min-height:27px; margin:0; padding:4px 11px; border:1px solid var(--pt-line);
+  border-radius:7px; background:#fff; color:var(--pt-ink); font:inherit;
+  font-size:12px; cursor:pointer;
+}
+.pt-reader-panel .pt-block-editor-actions .pt-editor-save {
+  border-color:#2563eb; background:#2563eb; color:#fff;
+}
+.pt-reader-panel .pt-block-editor-actions button:disabled { cursor:default; opacity:.55; }
 .pt-block p { margin:0 0 .65em; }
 .pt-block p:last-child { margin-bottom:0; }
 .pt-heading { margin:0; color:var(--pt-ink); line-height:1.4; }

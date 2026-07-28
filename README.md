@@ -67,7 +67,7 @@ Zotero → 设置 → PaperTranslate：
 ## 路线图
 
 - [ ] 新附件自动触发 MinerU 解析（Zotero Notifier）
-- [ ] 段落级重新翻译 / 复制译文
+- [x] 译文块右键复制原文/译文、重新翻译、编辑译文、定位 PDF
 - [ ] 左右栏滚动同步
 - [ ] PDF 大纲（outline）联动的章节过滤
 

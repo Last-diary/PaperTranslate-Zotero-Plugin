@@ -2,6 +2,7 @@
 // 目录结构：<ZoteroData>/papertranslate/<attachmentKey>/
 //   parser-manifest.json                     解析产物清单
 //   .papertranslate-translations.zh.json     DeepSeek 译文缓存
+//   .papertranslate-source-overrides.json    用户编辑的原文覆盖与待重译块
 //   .papertranslate-toc-enhancement.json     目录增强缓存
 //   content_list.json / images/ / source.pdf MinerU 解析产物与原 PDF
 
@@ -21,6 +22,10 @@ export function manifestPath(dir) {
 
 export function translationsPath(dir) {
   return PathUtils.join(dir, ".papertranslate-translations.zh.json");
+}
+
+export function sourceOverridesPath(dir) {
+  return PathUtils.join(dir, ".papertranslate-source-overrides.json");
 }
 
 export function tocEnhancementPath(dir) {

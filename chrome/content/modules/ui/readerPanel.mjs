@@ -21,14 +21,16 @@ const WORKSPACE_ID = "papertranslate-workspace";
 const PANEL_OPEN_CLASS = "papertranslate-panel-open";
 const PANEL_OCCUPIED_WIDTH_VAR = "--papertranslate-panel-occupied-width";
 const DEFAULT_WIDTH = 440;
-const DEFAULT_WIDTH_RATIO = 0.4;
+const DEFAULT_WIDTH_RATIO = 0.5;
 const MIN_WIDTH = 280;
 const AUTO_TRANSLATE_DEBOUNCE_MS = 300;
 const AUTO_TRANSLATE_PREFETCH_PX = 160;
+const PDF_AUTO_ZOOM_FALLBACK_DELAY_MS = 800;
 const PDF_LOCATOR_STYLE_ID = "papertranslate-pdf-locator-style";
 
-// 会话内记住用户调整的宽度
+// 会话内记住用户实际拖动后的宽度与比例；未拖动时始终使用默认比例。
 let lastWidth = DEFAULT_WIDTH;
+let lastUserWidthRatio = null;
 
 const panelStates = new WeakMap();
 const styledDocuments = new WeakSet();
@@ -282,6 +284,76 @@ function blockContent(block, state) {
   return block.text;
 }
 
+function originalBlockText(block) {
+  if (["image", "chart", "table"].includes(block?.type)) {
+    return Array.isArray(block.captions) ? block.captions.filter(Boolean).join("\n").trim() : "";
+  }
+  return String(block?.text || "").trim();
+}
+
+function setOriginalBlockText(block, value) {
+  if (["image", "chart", "table"].includes(block?.type)) {
+    block.captions = String(value || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  } else {
+    block.text = String(value || "").trim();
+  }
+}
+
+function sourceOverrideState(data) {
+  const overrides = data?.overrides && typeof data.overrides === "object"
+    ? data.overrides
+    : {};
+  const pendingIds = Array.isArray(data?.pendingTranslationIds)
+    ? data.pendingTranslationIds.filter((id) => typeof id === "string")
+    : [];
+  return {
+    overrides,
+    pendingIds: new Set(pendingIds)
+  };
+}
+
+function applySourceOverrides(blocks, overrides) {
+  for (const block of blocks) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, block.id)) continue;
+    setOriginalBlockText(block, overrides[block.id]);
+  }
+}
+
+function sourceOverridePayload(state, overrides = state.sourceOverrides, pendingIds = state.pendingSourceTranslationIds) {
+  return {
+    version: 1,
+    overrides,
+    pendingTranslationIds: [...pendingIds]
+  };
+}
+
+async function writeSourceOverrideState(state) {
+  await storage.writeJson(
+    storage.sourceOverridesPath(state.dir),
+    sourceOverridePayload(state)
+  );
+}
+
+async function clearCompletedSourceRetranslations(state, ids, translations = state.translations) {
+  const nextPendingIds = new Set(state.pendingSourceTranslationIds);
+  let changed = false;
+  for (const id of ids) {
+    if (translations[id] && nextPendingIds.delete(id)) {
+      changed = true;
+    }
+  }
+  if (changed) {
+    await storage.writeJson(
+      storage.sourceOverridesPath(state.dir),
+      sourceOverridePayload(state, state.sourceOverrides, nextPendingIds)
+    );
+    state.pendingSourceTranslationIds = nextPendingIds;
+  }
+}
+
 function captionContent(block, state) {
   const captions = Array.isArray(block.captions) ? block.captions : [];
   if (state.mode === "translation" && ["image", "chart", "table"].includes(block.type)) {
@@ -380,16 +452,12 @@ function el(doc, tag, cssText) {
 
 function ensurePanelStyles(doc) {
   if (styledDocuments.has(doc)) return;
-  const win = doc.defaultView;
-  try {
-    const sheet = new win.CSSStyleSheet();
-    sheet.replaceSync(READER_PANEL_CSS);
-    doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
-  } catch {
-    const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
-    style.textContent = READER_PANEL_CSS;
-    (doc.head || doc.documentElement).appendChild(style);
-  }
+  // Reader 文档位于另一个 privileged compartment。读取 adoptedStyleSheets
+  // 会尝试遍历 XrayWrapper，并触发 Symbol.iterator 拒绝警告；直接注入
+  // <style> 可避免跨 compartment 传递 CSSStyleSheet。
+  const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
+  style.textContent = READER_PANEL_CSS;
+  (doc.head || doc.documentElement).appendChild(style);
   styledDocuments.add(doc);
 }
 
@@ -423,6 +491,50 @@ function makeHeaderIconButton(doc, icon, title) {
   svg.appendChild(path);
   button.appendChild(svg);
   return button;
+}
+
+function makeBlockContextMenu(doc) {
+  const menu = el(doc, "div");
+  menu.className = "pt-block-context-menu";
+  menu.hidden = true;
+  menu.setAttribute("role", "menu");
+  return menu;
+}
+
+function populateBlockContextMenu(state) {
+  const { blockContextMenu: menu } = state.els;
+  menu.textContent = "";
+
+  const addCommand = (action, label) => {
+    const button = el(state.doc, "button");
+    button.type = "button";
+    button.dataset.action = action;
+    button.textContent = label;
+    button.setAttribute("role", "menuitem");
+    menu.appendChild(button);
+  };
+  const addSeparator = () => {
+    const separator = el(state.doc, "div");
+    separator.className = "pt-menu-separator";
+    separator.setAttribute("role", "separator");
+    menu.appendChild(separator);
+  };
+
+  if (state.mode === "original") {
+    addCommand("copy-original", "复制原文");
+    addSeparator();
+    addCommand("edit", "编辑内容");
+    addSeparator();
+    addCommand("locate", "在 PDF 中定位");
+  } else {
+    addCommand("copy-translation", "复制译文");
+    addCommand("copy-original", "复制原文");
+    addSeparator();
+    addCommand("retranslate", "重新翻译");
+    addCommand("edit", "编辑内容");
+    addSeparator();
+    addCommand("locate", "在 PDF 中定位");
+  }
 }
 
 function buildPanelShell(doc) {
@@ -479,7 +591,8 @@ function buildPanelShell(doc) {
   footer.className = "pt-status-bar";
   footer.textContent = "加载中…";
 
-  root.append(header, paneHead, content, footer);
+  const blockContextMenu = makeBlockContextMenu(doc);
+  root.append(header, paneHead, content, footer, blockContextMenu);
   return {
     root,
     header,
@@ -492,68 +605,109 @@ function buildPanelShell(doc) {
     refreshBtn,
     closeBtn,
     body,
-    footer
+    footer,
+    blockContextMenu
   };
 }
 
 function updateOuterLayoutMetrics(state) {
-  if (!state.workspace || !state.splitView) return;
-  const occupiedWidth = Math.max(
-    0,
-    state.workspace.getBoundingClientRect().width
-      - state.splitView.getBoundingClientRect().width
-  );
+  if (!state.workspace) return;
+  const occupiedWidth = Math.max(0, state.workspace.getBoundingClientRect().width);
   state.doc.documentElement.style.setProperty(
     PANEL_OCCUPIED_WIDTH_VAR,
     `${Math.ceil(occupiedWidth)}px`
   );
 }
 
+function availableReaderWidth(state) {
+  const viewportWidth = state.doc.documentElement.clientWidth || state.win.innerWidth;
+  const splitLeft = state.splitView?.getBoundingClientRect().left || 0;
+  return Math.max(0, viewportWidth - splitLeft);
+}
+
 function setPanelWidth(state, width) {
   const roundedWidth = Math.round(width);
   state.els.root.style.width = `${roundedWidth}px`;
   state.els.root.style.flexBasis = `${roundedWidth}px`;
+  if (state.workspace) {
+    // 预留拖拽手柄宽度；原生 #split-view 只通过 inset 缩窄，不换父节点。
+    state.workspace.style.width = `${roundedWidth + 9}px`;
+  }
   state.els.root.classList.toggle("pt-compact", roundedWidth < 360);
   updateOuterLayoutMetrics(state);
 }
 
 function resizePanelToWorkspace(state) {
   if (!state.workspace || state.disposed) return;
-  const workspaceWidth = state.workspace.clientWidth || state.win.innerWidth;
-  if (!workspaceWidth) return;
-  const ratio = state.panelWidthRatio || DEFAULT_WIDTH_RATIO;
-  const maxWidth = Math.max(MIN_WIDTH, workspaceWidth - 320);
+  const readerWidth = availableReaderWidth(state);
+  if (!readerWidth) return;
+  const ratio = state.panelWidthRatio ?? lastUserWidthRatio ?? DEFAULT_WIDTH_RATIO;
+  const maxWidth = Math.max(MIN_WIDTH, readerWidth - 320);
   setPanelWidth(
     state,
-    Math.min(maxWidth, Math.max(MIN_WIDTH, workspaceWidth * ratio))
+    Math.min(maxWidth, Math.max(MIN_WIDTH, readerWidth * ratio))
   );
 }
 
-function applyNativePdfAutoZoom(state) {
-  if (state.disposed) return;
-  const internalReader = state.reader?._internalReader;
-  if (!internalReader) return;
+function debugPdfAutoZoom(stage, details = {}) {
+  const record = {
+    stage,
+    version: ctx.version || "",
+    api: "reader.zoomAuto",
+    ...details
+  };
+  try {
+    console.log("[PaperTranslate][pdf-auto-zoom]", record);
+  } catch {}
+  try {
+    ctx.Zotero?.debug(`[PaperTranslate][pdf-auto-zoom] ${JSON.stringify(record)}`);
+  } catch {}
+}
 
-  // Zotero 的公开 zoomAuto() 只作用于当前活动视图；原生双视图开启时，
-  // 同时设置两个 PDF view，保证左右 PDF 都使用“自动调整大小”。
-  const views = [
-    internalReader._primaryView,
-    internalReader._secondaryView
-  ].filter(Boolean);
-  if (views.length) {
-    for (const view of views) {
-      try {
-        view.zoomAuto?.();
-        // PDF.js 监听的是每个 PDF iframe 自己的 resize，而不是外层
-        // Zotero Reader 窗口。主动通知内层窗口，立即按新的容器宽度重算。
-        const viewerWindow = view._iframeWindow?.wrappedJSObject || view._iframeWindow;
-        viewerWindow?.dispatchEvent(new viewerWindow.Event("resize"));
-      } catch {}
+function getNativePdfReadyCompatibility(state) {
+  try {
+    // Zotero 没有公开的“PDF 首页已渲染”Reader 事件。这里集中检测官方
+    // Reader 源码中的内部初始化 Promise，并在调用方继续检测 PDF.js
+    // onePageRendered；字段变化时返回 null，由单次延时方案安全降级。
+    const primaryView = state.reader?._internalReader?._primaryView;
+    const initializedPromise = primaryView?.initializedPromise;
+    if (!primaryView || typeof initializedPromise?.then !== "function") {
+      return null;
     }
-  } else {
-    try {
-      internalReader.zoomAuto?.();
-    } catch {}
+    return { primaryView, initializedPromise };
+  } catch (error) {
+    debugPdfAutoZoom("compat-unavailable", {
+      reason: "capability-check-error",
+      message: error?.message || String(error)
+    });
+    return null;
+  }
+}
+
+function applyNativePdfAutoZoom(state, source) {
+  if (state.disposed) return false;
+  const reader = state.reader;
+  if (reader?.type && reader.type !== "pdf") {
+    debugPdfAutoZoom("skipped", { source, reason: "not-pdf", readerType: reader.type });
+    return false;
+  }
+  if (typeof reader?.zoomAuto !== "function") {
+    debugPdfAutoZoom("unsupported", { source, reason: "reader.zoomAuto-unavailable" });
+    return false;
+  }
+
+  try {
+    // 最终操作仍使用 ReaderInstance 的官方 Proxy API；就绪兼容层不会
+    // 直接改写 PDFViewerApplication 的缩放状态。
+    reader.zoomAuto();
+    debugPdfAutoZoom("applied", { source });
+    return true;
+  } catch (error) {
+    debugPdfAutoZoom("apply-error", {
+      source,
+      message: error?.message || String(error)
+    });
+    return false;
   }
 }
 
@@ -562,28 +716,89 @@ function scheduleNativePdfAutoZoom(state) {
     state.win.clearTimeout(state.pdfAutoZoomTimer);
     state.pdfAutoZoomTimer = null;
   }
-  // 等外层 flex 布局完成两帧后再切换原生缩放模式，避免 PDF.js
-  // 根据面板打开前的旧容器宽度计算缩放比例。
+  const requestId = ++state.pdfAutoZoomRequestId;
+  const isCurrentRequest = () => (
+    !state.disposed && state.pdfAutoZoomRequestId === requestId
+  );
+  const applyOnce = (source) => {
+    if (!isCurrentRequest()) return;
+    updateOuterLayoutMetrics(state);
+    try {
+      state.win.dispatchEvent(new state.win.Event("resize"));
+    } catch {}
+    applyNativePdfAutoZoom(state, source);
+  };
+  const scheduleFallback = (reason, details = {}) => {
+    if (!isCurrentRequest()) return;
+    debugPdfAutoZoom("fallback-scheduled", {
+      reason,
+      delayMs: PDF_AUTO_ZOOM_FALLBACK_DELAY_MS,
+      ...details
+    });
+    state.pdfAutoZoomTimer = state.win.setTimeout(() => {
+      state.pdfAutoZoomTimer = null;
+      applyOnce("delayed-fallback");
+    }, PDF_AUTO_ZOOM_FALLBACK_DELAY_MS);
+  };
+
+  // 先等待外层 flex 布局提交，再优先走能力检测过的内部就绪兼容层。
+  // 不再读取异步的 zoomAutoEnabled，也不会连续调用 zoomAuto()。
   state.win.requestAnimationFrame(() => {
     state.win.requestAnimationFrame(() => {
-      if (state.disposed) return;
-      updateOuterLayoutMetrics(state);
-      try {
-        state.win.dispatchEvent(new state.win.Event("resize"));
-      } catch {}
-      applyNativePdfAutoZoom(state);
-      // Zotero 的原生拆分视图还可能在下一轮 React 布局中更新 iframe，
-      // 稍后再校正一次，确保面板刚打开时即可完成自动适配。
-      state.pdfAutoZoomTimer = state.win.setTimeout(() => {
-        state.pdfAutoZoomTimer = null;
-        applyNativePdfAutoZoom(state);
-      }, 120);
+      if (!isCurrentRequest()) return;
+      const compatibility = getNativePdfReadyCompatibility(state);
+      if (!compatibility) {
+        scheduleFallback("compatibility-unavailable");
+        return;
+      }
+
+      debugPdfAutoZoom("compat-waiting", {
+        signal: "primaryView.initializedPromise+pdfViewer.onePageRendered+pdfViewer.pagesPromise"
+      });
+      void (async () => {
+        try {
+          await compatibility.initializedPromise;
+          if (!isCurrentRequest()) return;
+
+          const currentPrimaryView = state.reader?._internalReader?._primaryView;
+          if (currentPrimaryView !== compatibility.primaryView) {
+            scheduleFallback("primary-view-replaced");
+            return;
+          }
+          const onePageRendered = currentPrimaryView?._iframeWindow
+            ?.PDFViewerApplication?.pdfViewer?.onePageRendered;
+          const pagesPromise = currentPrimaryView?._iframeWindow
+            ?.PDFViewerApplication?.pdfViewer?.pagesPromise;
+          if (
+            typeof onePageRendered?.then !== "function"
+            || typeof pagesPromise?.then !== "function"
+          ) {
+            scheduleFallback("pdf-viewer-readiness-unavailable");
+            return;
+          }
+
+          // 顺序等待，避免把跨 privileged compartment 的 Promise 放进
+          // 可迭代集合后触发 XrayWrapper 的 Symbol.iterator 检查。
+          await onePageRendered;
+          await pagesPromise;
+          if (!isCurrentRequest()) return;
+          debugPdfAutoZoom("compat-ready", {
+            signal: "primaryView.initializedPromise+pdfViewer.onePageRendered+pdfViewer.pagesPromise"
+          });
+          applyOnce("compat-ready");
+        } catch (error) {
+          scheduleFallback("compatibility-wait-error", {
+            message: error?.message || String(error)
+          });
+        }
+      })();
     });
   });
 }
 
-// 外层并排布局：#split-view 保持为完整的 PDF 双视图单元，
-// PaperTranslate 面板作为其外层同级项，不再参与 Zotero 原生拆分排列。
+// 同级并排布局：绝不移动包含 PDF iframe 的原生 #split-view。
+// Firefox 中给 iframe 祖先换父节点会重建浏览上下文，导致 PDF 和缩略图
+// 渲染状态丢失。这里只增加右侧同级面板，并用 CSS inset 缩窄原生区域。
 function attachSideBySide(state) {
   const doc = state.doc;
   const splitView = doc.getElementById("split-view");
@@ -639,11 +854,12 @@ function attachSideBySide(state) {
     const onMove = (ev) => {
       if (ev.pointerId !== pointerId) return;
       ev.preventDefault();
-      const workspaceWidth = state.workspace?.clientWidth || state.win.innerWidth;
-      const maxWidth = Math.max(MIN_WIDTH, Math.round(workspaceWidth - 320));
+      const readerWidth = availableReaderWidth(state);
+      const maxWidth = Math.max(MIN_WIDTH, Math.round(readerWidth - 320));
       const width = Math.min(maxWidth, Math.max(MIN_WIDTH, startWidth + (startX - ev.clientX)));
       setPanelWidth(state, width);
-      state.panelWidthRatio = workspaceWidth ? width / workspaceWidth : null;
+      state.panelWidthRatio = readerWidth ? width / readerWidth : null;
+      lastUserWidthRatio = state.panelWidthRatio;
       lastWidth = width;
     };
 
@@ -680,35 +896,27 @@ function attachSideBySide(state) {
     occupiedWidth: doc.documentElement.style.getPropertyValue(PANEL_OCCUPIED_WIDTH_VAR)
   };
 
-  originalParent.insertBefore(workspace, splitView);
-  workspace.append(splitView, resizer, state.els.root);
-  splitView.style.setProperty("position", "relative", "important");
-  splitView.style.setProperty("inset", "auto", "important");
-  splitView.style.setProperty("inset-inline-start", "auto", "important");
-  splitView.style.setProperty("inset-inline-end", "auto", "important");
-  splitView.style.setProperty("top", "auto", "important");
-  splitView.style.setProperty("bottom", "auto", "important");
-  splitView.style.setProperty("min-width", "0", "important");
-  splitView.style.setProperty("width", "auto", "important");
-  splitView.style.setProperty("height", "100%", "important");
-  splitView.style.setProperty("flex", "1 1 auto", "important");
-  primaryView.style.minWidth = "0";
-  if (secondaryView) secondaryView.style.minWidth = "0";
-
-  const workspaceWidth = workspace.clientWidth || state.win.innerWidth;
-  const maxInitialWidth = Math.max(MIN_WIDTH, workspaceWidth - 320);
-  const initialWidth = Math.min(
-    maxInitialWidth,
-    Math.max(MIN_WIDTH, workspaceWidth * DEFAULT_WIDTH_RATIO)
-  );
-  state.panelWidthRatio = DEFAULT_WIDTH_RATIO;
-
-  doc.body.classList.add(PANEL_OPEN_CLASS);
+  if (originalNextSibling?.parentNode === originalParent) {
+    originalParent.insertBefore(workspace, originalNextSibling);
+  } else {
+    originalParent.appendChild(workspace);
+  }
+  workspace.append(resizer, state.els.root);
   state.workspace = workspace;
   state.splitView = splitView;
   state.resizer = resizer;
-  state.layoutMode = "outer-side-by-side";
+  state.layoutMode = "sibling-side-by-side";
+
+  const readerWidth = availableReaderWidth(state);
+  const maxInitialWidth = Math.max(MIN_WIDTH, readerWidth - 320);
+  const initialRatio = lastUserWidthRatio ?? DEFAULT_WIDTH_RATIO;
+  const initialWidth = Math.min(
+    maxInitialWidth,
+    Math.max(MIN_WIDTH, readerWidth * initialRatio)
+  );
+  state.panelWidthRatio = initialRatio;
   setPanelWidth(state, initialWidth);
+  doc.body.classList.add(PANEL_OPEN_CLASS);
 
   scheduleNativePdfAutoZoom(state);
 }
@@ -726,35 +934,17 @@ function detachPanel(state) {
     state.win.clearTimeout(state.pdfAutoZoomTimer);
     state.pdfAutoZoomTimer = null;
   }
+  state.pdfAutoZoomRequestId += 1;
+  if (state.sourceRetranslateTimer) {
+    state.win.clearTimeout(state.sourceRetranslateTimer);
+    state.sourceRetranslateTimer = null;
+  }
   state.autoTranslateQueued.clear();
   state.eventCleanup?.();
   state.eventCleanup = null;
   state.resizeCleanup?.();
   state.resizeCleanup = null;
-  if (state.layoutMode === "outer-side-by-side") {
-    const primaryView = doc.getElementById("primary-view");
-    const secondaryView = doc.getElementById("secondary-view");
-    if (primaryView && state.layoutBackup) {
-      primaryView.style.minWidth = state.layoutBackup.primaryMinWidth || "";
-    }
-    if (secondaryView && state.layoutBackup) {
-      secondaryView.style.minWidth = state.layoutBackup.secondaryMinWidth || "";
-    }
-    const splitView = state.splitView || doc.getElementById("split-view");
-    const backup = state.layoutBackup;
-    if (splitView && backup?.originalParent) {
-      const nextSibling = backup.originalNextSibling;
-      if (nextSibling?.parentNode === backup.originalParent) {
-        backup.originalParent.insertBefore(splitView, nextSibling);
-      } else {
-        backup.originalParent.appendChild(splitView);
-      }
-      if (backup.splitStyle === null) {
-        splitView.removeAttribute("style");
-      } else {
-        splitView.setAttribute("style", backup.splitStyle);
-      }
-    }
+  if (state.layoutMode === "sibling-side-by-side") {
     if (!state.layoutBackup?.panelOpenClassExisted) {
       doc.body.classList.remove(PANEL_OPEN_CLASS);
     }
@@ -779,6 +969,331 @@ function detachPanel(state) {
 
 function setFooter(state, text) {
   state.els.footer.textContent = text;
+}
+
+const BLOCK_MENU_LOG_PREFIX = "[PaperTranslate][block-context-menu]";
+
+function debugBlockContextMenu(stage, details = {}) {
+  const record = { stage, ...details };
+  try {
+    console.log(BLOCK_MENU_LOG_PREFIX, record);
+  } catch {}
+  try {
+    ctx.Zotero?.debug(`${BLOCK_MENU_LOG_PREFIX} ${JSON.stringify(record)}`);
+  } catch {}
+}
+
+function reportBlockContextMenuError(error, details = {}) {
+  debugBlockContextMenu("error", {
+    ...details,
+    message: error?.message || String(error),
+    stack: error?.stack || ""
+  });
+  try {
+    console.error(BLOCK_MENU_LOG_PREFIX, error);
+  } catch {}
+  ctx.Zotero?.logError(error);
+}
+
+function closeBlockContextMenu(state, reason = "") {
+  const wasOpen = !state.els.blockContextMenu.hidden;
+  state.contextBlockId = null;
+  state.els.blockContextMenu.hidden = true;
+  if (wasOpen) {
+    debugBlockContextMenu("closed", {
+      reason: reason || "unspecified",
+      hidden: state.els.blockContextMenu.hidden
+    });
+  }
+}
+
+function blockSection(state, id) {
+  for (const section of state.els.body.querySelectorAll("section[data-id]")) {
+    if (section.getAttribute("data-id") === id) return section;
+  }
+  return null;
+}
+
+function refreshBlockSection(state, block) {
+  const section = blockSection(state, block.id);
+  if (!section) return;
+  const html = blockBodyHtml(block, state);
+  if (!html) return;
+  section.innerHTML = html;
+  section.classList.remove("pt-editing");
+  section.setAttribute(
+    "data-translated",
+    state.mode === "translation" && state.translations[block.id] ? "1" : "0"
+  );
+}
+
+async function copyBlockText(state, text, label) {
+  const value = String(text || "");
+  if (!value) {
+    setFooter(state, `${label}为空，无法复制。`);
+    return;
+  }
+  try {
+    await state.win.navigator.clipboard.writeText(value);
+  } catch {
+    const clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper);
+    clipboard.copyString(value);
+  }
+  setFooter(state, `${label}已复制。`);
+}
+
+async function retranslateBlock(state, block) {
+  if (state.translationBusy || state.translatingIds.has(block.id)) {
+    setFooter(state, "翻译任务正在进行，请稍后重试。");
+    return;
+  }
+
+  state.translationBusy = true;
+  state.els.translateBtn.disabled = true;
+  state.translatingIds.add(block.id);
+  syncTranslationMasks(state);
+  setFooter(state, "正在重新翻译当前块…");
+  try {
+    const service = new TranslationService();
+    const result = await service.translateBlocks({
+      dir: state.dir,
+      allBlocks: state.blocks,
+      ids: [block.id],
+      force: true
+    });
+    if (state.disposed) return;
+    state.translations = result.translations;
+    await clearCompletedSourceRetranslations(state, [block.id], state.translations);
+    refreshBlockSection(state, block);
+    updateTranslationStatus(state);
+    setFooter(
+      state,
+      result.translated ? "当前块已重新翻译。" : "重新翻译完成，但没有返回新的译文。"
+    );
+  } catch (error) {
+    if (!state.disposed) {
+      setFooter(state, `重新翻译失败：${error.message || error}`);
+      ctx.Zotero.logError(error);
+    }
+  } finally {
+    state.translatingIds.delete(block.id);
+    state.translationBusy = false;
+    if (!state.disposed) {
+      syncTranslationMasks(state);
+      state.els.translateBtn.disabled = false;
+    }
+  }
+}
+
+function editBlockContent(state, block) {
+  if (state.translationBusy || state.translatingIds.has(block.id)) {
+    setFooter(state, "翻译任务正在进行，请稍后再编辑内容。");
+    return;
+  }
+  const section = blockSection(state, block.id);
+  if (!section) return;
+
+  const editingOriginal = state.mode === "original";
+  section.classList.add("pt-editing");
+  section.textContent = "";
+  const editor = el(state.doc, "div");
+  editor.className = "pt-block-editor";
+  // Zotero Reader 的 FocusManager 会在捕获阶段把 textarea 的方向键
+  // 当作界面焦点导航并 preventDefault；contenteditable 是其明确排除的
+  // 文本编辑元素，因此保留浏览器原生的光标移动和文本选择行为。
+  const editorInput = el(state.doc, "div");
+  editorInput.className = "pt-block-editor-input";
+  editorInput.contentEditable = "true";
+  editorInput.setAttribute("role", "textbox");
+  editorInput.setAttribute("aria-multiline", "true");
+  editorInput.spellcheck = false;
+  const previousValue = editingOriginal
+    ? originalBlockText(block)
+    : String(state.translations[block.id] || "");
+  editorInput.textContent = previousValue;
+  editorInput.setAttribute("aria-label", editingOriginal ? "编辑原文内容" : "编辑译文内容");
+
+  const actions = el(state.doc, "div");
+  actions.className = "pt-block-editor-actions";
+  const cancelButton = el(state.doc, "button");
+  cancelButton.type = "button";
+  cancelButton.textContent = "取消";
+  const saveButton = el(state.doc, "button");
+  saveButton.type = "button";
+  saveButton.className = "pt-editor-save";
+  saveButton.textContent = "保存";
+  actions.append(cancelButton, saveButton);
+  editor.append(editorInput, actions);
+  section.appendChild(editor);
+
+  const cancel = () => refreshBlockSection(state, block);
+  const save = async () => {
+    const value = editorInput.innerText.replace(/\r\n?/g, "\n").trim();
+    if (!value) {
+      setFooter(state, `${editingOriginal ? "原文" : "译文"}内容不能为空。`);
+      editorInput.focus();
+      return;
+    }
+    if (value === previousValue) {
+      refreshBlockSection(state, block);
+      setFooter(state, "内容未更改。");
+      return;
+    }
+    saveButton.disabled = true;
+    cancelButton.disabled = true;
+    try {
+      if (editingOriginal) {
+        const nextOverrides = { ...state.sourceOverrides, [block.id]: value };
+        const nextPendingIds = new Set(state.pendingSourceTranslationIds);
+        const nextTranslations = { ...state.translations };
+        const needsTranslation = state.eligibleIds.has(block.id);
+        if (needsTranslation) {
+          nextPendingIds.add(block.id);
+          delete nextTranslations[block.id];
+        }
+
+        // 原文覆盖独立保存，不修改 MinerU 解析产物。先让旧译文失效，
+        // 再写入覆盖与待重译标记，避免重新打开面板时展示过期译文。
+        await storage.writeJson(storage.translationsPath(state.dir), nextTranslations);
+        try {
+          await storage.writeJson(
+            storage.sourceOverridesPath(state.dir),
+            sourceOverridePayload(state, nextOverrides, nextPendingIds)
+          );
+        } catch (error) {
+          await storage.writeJson(storage.translationsPath(state.dir), state.translations).catch(() => {});
+          throw error;
+        }
+
+        state.sourceOverrides = nextOverrides;
+        state.pendingSourceTranslationIds = nextPendingIds;
+        state.translations = nextTranslations;
+        setOriginalBlockText(block, value);
+        state.eligibleIds = eligibleTranslationIds(state.blocks, getConfig().translation);
+        renderToc(state);
+        refreshBlockSection(state, block);
+        updateTranslationStatus(state);
+        setFooter(
+          state,
+          needsTranslation
+            ? "原文已保存；切换到译文页后将自动重新翻译当前块。"
+            : "原文已保存。"
+        );
+      } else {
+        const nextTranslations = { ...state.translations, [block.id]: value };
+        const nextPendingIds = new Set(state.pendingSourceTranslationIds);
+        nextPendingIds.delete(block.id);
+        await storage.writeJson(storage.translationsPath(state.dir), nextTranslations);
+        try {
+          await storage.writeJson(
+            storage.sourceOverridesPath(state.dir),
+            sourceOverridePayload(state, state.sourceOverrides, nextPendingIds)
+          );
+        } catch (error) {
+          await storage.writeJson(storage.translationsPath(state.dir), state.translations).catch(() => {});
+          throw error;
+        }
+        state.translations = nextTranslations;
+        state.pendingSourceTranslationIds = nextPendingIds;
+        refreshBlockSection(state, block);
+        updateTranslationStatus(state);
+        setFooter(state, "当前块译文已保存。");
+      }
+      if (state.disposed) return;
+    } catch (error) {
+      saveButton.disabled = false;
+      cancelButton.disabled = false;
+      setFooter(state, `保存${editingOriginal ? "原文" : "译文"}失败：${error.message || error}`);
+      ctx.Zotero.logError(error);
+    }
+  };
+
+  editor.addEventListener("click", (event) => event.stopPropagation());
+  cancelButton.addEventListener("click", cancel);
+  saveButton.addEventListener("click", save);
+  editorInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      save();
+    }
+  });
+  editorInput.focus();
+  const selection = state.win.getSelection();
+  const range = state.doc.createRange();
+  range.selectNodeContents(editorInput);
+  range.collapse(false);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function showBlockContextMenu(state, block, clientX, clientY) {
+  const menu = state.els.blockContextMenu;
+  state.contextBlockId = block.id;
+  selectBlockInPanel(state, block);
+  populateBlockContextMenu(state);
+  debugBlockContextMenu("selected", {
+    blockId: block.id,
+    mode: state.mode,
+    clientX,
+    clientY,
+    menuExists: Boolean(menu),
+    menuType: menu?.constructor?.name || "",
+    hidden: menu?.hidden,
+    hiddenAttribute: menu?.getAttribute?.("hidden")
+  });
+
+  const busy = state.translationBusy || state.translatingIds.has(block.id);
+  const buttons = menu.querySelectorAll("button[data-action]");
+  for (const button of buttons) {
+    button.disabled = busy && ["retranslate", "edit"].includes(button.dataset.action);
+  }
+  debugBlockContextMenu("buttons-ready", {
+    blockId: block.id,
+    busy,
+    buttonCount: buttons.length
+  });
+
+  menu.hidden = false;
+  debugBlockContextMenu("visibility-set", {
+    blockId: block.id,
+    hidden: menu.hidden,
+    hiddenAttribute: menu.getAttribute("hidden"),
+    display: state.win.getComputedStyle(menu).display,
+    visibility: state.win.getComputedStyle(menu).visibility
+  });
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const rootRect = state.els.root.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  debugBlockContextMenu("measured", {
+    blockId: block.id,
+    rootRect: {
+      left: rootRect.left,
+      top: rootRect.top,
+      width: rootRect.width,
+      height: rootRect.height
+    },
+    menuRect: {
+      left: menuRect.left,
+      top: menuRect.top,
+      width: menuRect.width,
+      height: menuRect.height
+    }
+  });
+  const left = Math.max(4, Math.min(clientX - rootRect.left, rootRect.width - menuRect.width - 4));
+  const top = Math.max(4, Math.min(clientY - rootRect.top, rootRect.height - menuRect.height - 4));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  debugBlockContextMenu("opened", {
+    blockId: block.id,
+    left,
+    top,
+    hidden: menu.hidden,
+    display: state.win.getComputedStyle(menu).display
+  });
 }
 
 function updateModeButtons(state) {
@@ -982,7 +1497,7 @@ function ensurePdfLocatorStyle(doc) {
   (doc.head || doc.documentElement).appendChild(style);
 }
 
-function centerPdfHighlight(doc, highlight, smooth = true) {
+function centerPdfHighlight(doc, highlight) {
   const container = doc.getElementById("viewerContainer");
   if (!container || !highlight?.isConnected) return;
   const containerRect = container.getBoundingClientRect();
@@ -992,11 +1507,9 @@ function centerPdfHighlight(doc, highlight, smooth = true) {
   const highlightCenter = highlightRect.top + highlightRect.height / 2;
   const viewportCenter = containerRect.top + containerRect.height / 2;
   const targetTop = Math.max(0, container.scrollTop + highlightCenter - viewportCenter);
-  try {
-    container.scrollTo({ top: targetTop, behavior: smooth ? "smooth" : "auto" });
-  } catch {
-    container.scrollTop = targetTop;
-  }
+  // container 属于 PDF viewer 的 privileged compartment。传入包含
+  // behavior 的对象会触发 SecurityWrapper 拒绝；数字属性赋值可安全跨域。
+  container.scrollTop = targetTop;
 }
 
 function showPdfBlockHighlight(state, block, attempt = 0) {
@@ -1050,12 +1563,12 @@ function showPdfBlockHighlight(state, block, attempt = 0) {
 
   page.appendChild(highlight);
   state.pdfHighlightNode = highlight;
-  centerPdfHighlight(doc, highlight, true);
+  centerPdfHighlight(doc, highlight);
   // 原生 Reader 的页面导航可能在高亮插入后继续调整滚动位置，
   // 稍后再校正一次，确保目标段落最终位于视口中间。
   state.pdfCenterTimer = state.win.setTimeout(() => {
     state.pdfCenterTimer = null;
-    centerPdfHighlight(doc, highlight, false);
+    centerPdfHighlight(doc, highlight);
   }, 180);
 }
 
@@ -1091,11 +1604,57 @@ function selectBlockInPanel(state, block, { scroll = false } = {}) {
       - bodyRect.top
       - bodyRect.height / 2
   );
-  try {
-    state.els.body.scrollTo({ top: targetTop, behavior: "smooth" });
-  } catch {
-    state.els.body.scrollTop = targetTop;
+  // Reader 文档处于另一个 compartment，不向 scrollTo() 传对象。
+  state.els.body.scrollTop = targetTop;
+}
+
+function captureBlockScrollAnchor(state) {
+  const container = state?.els?.body;
+  if (!container) return null;
+
+  const containerRect = container.getBoundingClientRect();
+  const sections = container.querySelectorAll("section[data-id]");
+  let closest = null;
+  for (const section of sections) {
+    const blockId = section.getAttribute("data-id");
+    if (!blockId) continue;
+    const sectionRect = section.getBoundingClientRect();
+    const offset = sectionRect.top - containerRect.top;
+    const candidate = {
+      blockId,
+      offset,
+      scrollTop: container.scrollTop
+    };
+    if (!closest || Math.abs(offset) < Math.abs(closest.offset)) {
+      closest = candidate;
+    }
+    if (sectionRect.bottom > containerRect.top && sectionRect.top < containerRect.bottom) {
+      return candidate;
+    }
   }
+  return closest;
+}
+
+function restoreBlockScrollAnchor(state, anchor) {
+  const container = state?.els?.body;
+  if (!container || !anchor) return;
+
+  let anchorSection = null;
+  for (const section of container.querySelectorAll("section[data-id]")) {
+    if (section.getAttribute("data-id") === anchor.blockId) {
+      anchorSection = section;
+      break;
+    }
+  }
+  if (!anchorSection) {
+    container.scrollTop = anchor.scrollTop;
+    return;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const sectionRect = anchorSection.getBoundingClientRect();
+  const currentOffset = sectionRect.top - containerRect.top;
+  container.scrollTop = Math.max(0, container.scrollTop + currentOffset - anchor.offset);
 }
 
 function locatePdfContextInPanel(state, block) {
@@ -1137,9 +1696,10 @@ function renderToc(state) {
 }
 
 function renderBlocks(state) {
-  const scrollTop = state.els.body.scrollTop;
+  closeBlockContextMenu(state);
+  const scrollAnchor = captureBlockScrollAnchor(state);
   state.els.body.innerHTML = state.blocks.map((block) => blockSectionHtml(block, state)).join("");
-  state.els.body.scrollTop = scrollTop;
+  restoreBlockScrollAnchor(state, scrollAnchor);
   updateModeButtons(state);
   const count = updateTranslationStatus(state);
   setFooter(state, `共 ${state.blocks.length} 块 · 已译 ${count} 段 · ${state.mode === "translation" ? "译文" : "原文"}模式`);
@@ -1150,6 +1710,8 @@ function renderBlocks(state) {
 function updateTranslatedBlocks(state) {
   updateTranslationStatus(state);
   if (state.mode !== "translation") return;
+  const scrollAnchor = captureBlockScrollAnchor(state);
+  let updated = false;
   const sections = state.els.body.querySelectorAll("section[data-id][data-translated='0']");
   for (const section of sections) {
     const id = section.getAttribute("data-id");
@@ -1159,8 +1721,10 @@ function updateTranslatedBlocks(state) {
     if (html) {
       section.innerHTML = html;
       section.setAttribute("data-translated", "1");
+      updated = true;
     }
   }
+  if (updated) restoreBlockScrollAnchor(state, scrollAnchor);
 }
 
 function syncTranslationMasks(state) {
@@ -1254,6 +1818,7 @@ async function queueVisibleTranslation(state) {
     });
     if (!state.disposed) {
       state.translations = result.translations;
+      await clearCompletedSourceRetranslations(state, ids, result.translations);
       revealCompletedMasks(state, ids, result.translations);
       updateTranslatedBlocks(state);
       setFooter(state, `当前屏幕自动翻译完成：新增 ${result.translated} 段。`);
@@ -1271,6 +1836,79 @@ async function queueVisibleTranslation(state) {
       syncTranslationMasks(state);
       state.els.translateBtn.disabled = false;
       if (!state.autoTranslateFailed) scheduleVisibleTranslation(state);
+    }
+  }
+}
+
+async function retranslateEditedOriginalBlocks(state) {
+  if (state.disposed || state.mode !== "translation") return;
+  const ids = [...state.pendingSourceTranslationIds].filter(
+    (id) => state.eligibleIds.has(id) && state.blockById.has(id)
+  );
+  if (!ids.length) return;
+  if (state.translationBusy) {
+    if (state.sourceRetranslateTimer) state.win.clearTimeout(state.sourceRetranslateTimer);
+    state.sourceRetranslateTimer = state.win.setTimeout(() => {
+      state.sourceRetranslateTimer = null;
+      retranslateEditedOriginalBlocks(state).catch((error) => {
+        if (!state.disposed) {
+          setFooter(state, `自动重译失败：${error.message || error}`);
+          ctx.Zotero.logError(error);
+        }
+      });
+    }, 250);
+    return;
+  }
+
+  if (state.autoTranslateTimer) {
+    state.win.clearTimeout(state.autoTranslateTimer);
+    state.autoTranslateTimer = null;
+  }
+  state.translationBusy = true;
+  state.els.translateBtn.disabled = true;
+  for (const id of ids) state.translatingIds.add(id);
+  syncTranslationMasks(state);
+  setFooter(state, `原文已修改，正在自动重新翻译… 0/${ids.length} 段`);
+
+  try {
+    const service = new TranslationService();
+    const result = await service.translateBlocks({
+      dir: state.dir,
+      allBlocks: state.blocks,
+      ids,
+      force: true,
+      onChunk: (cache, done, total) => {
+        if (state.disposed) return;
+        state.translations = cache;
+        revealCompletedMasks(state, ids, cache);
+        updateTranslatedBlocks(state);
+        setFooter(state, `原文已修改，正在自动重新翻译… ${done}/${total} 段`);
+      }
+    });
+    if (state.disposed) return;
+    state.translations = result.translations;
+    await clearCompletedSourceRetranslations(state, ids, state.translations);
+    revealCompletedMasks(state, ids, state.translations);
+    updateTranslatedBlocks(state);
+    const remaining = ids.filter((id) => state.pendingSourceTranslationIds.has(id)).length;
+    setFooter(
+      state,
+      remaining
+        ? `自动重译完成，但仍有 ${remaining} 段未返回译文。`
+        : `已根据修改后的原文重新翻译 ${ids.length} 段。`
+    );
+  } catch (error) {
+    if (!state.disposed) {
+      setFooter(state, `自动重译失败：${error.message || error}`);
+      ctx.Zotero.logError(error);
+    }
+  } finally {
+    for (const id of ids) state.translatingIds.delete(id);
+    state.translationBusy = false;
+    if (!state.disposed) {
+      syncTranslationMasks(state);
+      state.els.translateBtn.disabled = false;
+      scheduleVisibleTranslation(state);
     }
   }
 }
@@ -1304,6 +1942,7 @@ async function translateAllInPanel(state) {
     });
     if (!state.disposed) {
       state.translations = result.translations;
+      await clearCompletedSourceRetranslations(state, ids, result.translations);
       revealCompletedMasks(state, ids, result.translations);
       updateTranslatedBlocks(state);
       setFooter(state, `翻译完成：本次 ${result.translated} 段，缓存共 ${translatedCount(state)} 段。`);
@@ -1351,6 +1990,8 @@ async function reloadPanelInner(state) {
   if (!manifest) {
     state.blocks = [];
     state.translations = {};
+    state.sourceOverrides = {};
+    state.pendingSourceTranslationIds = new Set();
     state.blockById = new Map();
     state.els.body.textContent = "";
     const hint = el(state.doc, "div", "padding:20px; line-height:2;");
@@ -1388,8 +2029,14 @@ async function reloadPanelInner(state) {
     blocks = result.blocks;
   }
 
+  const storedSourceOverrides = sourceOverrideState(
+    await storage.readJson(storage.sourceOverridesPath(dir), {})
+  );
+  applySourceOverrides(blocks, storedSourceOverrides.overrides);
   state.blocks = blocks;
   state.blockById = new Map(blocks.map((block) => [block.id, block]));
+  state.sourceOverrides = storedSourceOverrides.overrides;
+  state.pendingSourceTranslationIds = storedSourceOverrides.pendingIds;
   state.translations = (await storage.readJson(storage.translationsPath(dir), {})) || {};
   state.eligibleIds = eligibleTranslationIds(blocks, config.translation);
 
@@ -1401,10 +2048,24 @@ async function reloadPanelInner(state) {
   if (imageResult.failed) {
     setFooter(state, `正文已加载 · 图片 ${imageResult.loaded} 成功，${imageResult.failed} 失败`);
   }
+  if (state.mode === "translation" && state.pendingSourceTranslationIds.size) {
+    retranslateEditedOriginalBlocks(state).catch((error) => {
+      if (!state.disposed) {
+        setFooter(state, `自动重译失败：${error.message || error}`);
+        ctx.Zotero.logError(error);
+      }
+    });
+  }
 }
 
 function attachPanelEvents(state) {
   const { els } = state;
+  debugBlockContextMenu("events-attached", {
+    version: ctx.version || "",
+    mode: state.mode,
+    menuExists: Boolean(els.blockContextMenu),
+    listener: "window-contextmenu+pointerdown+mousedown-v5-source-edit"
+  });
 
   els.closeBtn.addEventListener("click", () => {
     detachPanel(state);
@@ -1413,6 +2074,7 @@ function attachPanelEvents(state) {
   els.refreshBtn.addEventListener("click", () => reloadPanel(state));
   els.originalBtn.addEventListener("click", () => {
     if (state.mode === "original") return;
+    closeBlockContextMenu(state);
     state.mode = "original";
     if (state.autoTranslateTimer) {
       state.win.clearTimeout(state.autoTranslateTimer);
@@ -1423,15 +2085,128 @@ function attachPanelEvents(state) {
   });
   els.translationBtn.addEventListener("click", () => {
     if (state.mode === "translation") return;
+    closeBlockContextMenu(state);
     state.mode = "translation";
     state.autoTranslateFailed = false;
     renderBlocks(state);
-    scheduleVisibleTranslation(state, 0);
+    retranslateEditedOriginalBlocks(state).catch((error) => {
+      if (!state.disposed) {
+        setFooter(state, `自动重译失败：${error.message || error}`);
+        ctx.Zotero.logError(error);
+      }
+    });
   });
   els.translateBtn.addEventListener("click", () => translateAllInPanel(state));
 
+  const openBlockContextMenuFromEvent = (event, source) => {
+    let section = null;
+    let block = null;
+    try {
+      if (!els.body.contains(event.target)) return false;
+      debugBlockContextMenu("event", {
+        source,
+        mode: state.mode,
+        targetType: event.target?.constructor?.name || "",
+        targetTag: event.target?.tagName || "",
+        targetClass: event.target?.className || "",
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
+      if (event.target?.closest?.(".pt-block-editor")) {
+        debugBlockContextMenu("ignored", { source, reason: "editor" });
+        return false;
+      }
+      section = event.target?.closest?.("section[data-id]") || null;
+      if (!section) {
+        debugBlockContextMenu("ignored", {
+          source,
+          reason: "no-block-section"
+        });
+        return false;
+      }
+      block = state.blockById.get(section.getAttribute("data-id"));
+      if (!block) {
+        debugBlockContextMenu("ignored", {
+          source,
+          reason: "block-not-found",
+          blockId: section.getAttribute("data-id")
+        });
+        return false;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      showBlockContextMenu(state, block, event.clientX, event.clientY);
+      return true;
+    } catch (error) {
+      event.preventDefault();
+      reportBlockContextMenuError(error, {
+        handler: source,
+        mode: state.mode,
+        blockId: block?.id || section?.getAttribute?.("data-id") || ""
+      });
+      setFooter(state, `右键菜单打开失败：${error.message || error}`);
+      return true;
+    }
+  };
+  let lastSecondaryDownAt = 0;
+  let lastSecondaryMenuOpenAt = 0;
+  const onBlockSecondaryDown = (event) => {
+    if (event.button !== 2) return;
+    const now = Date.now();
+    // 同一次鼠标动作通常会连续产生 pointerdown 和 mousedown。
+    if (now - lastSecondaryDownAt < 80 && els.body.contains(event.target)) return;
+    lastSecondaryDownAt = now;
+    if (openBlockContextMenuFromEvent(event, event.type)) {
+      lastSecondaryMenuOpenAt = now;
+    }
+  };
+  const onBlockContextMenu = (event) => {
+    // Windows 鼠标右键通常先触发 pointerdown/mousedown，再触发 contextmenu。
+    // 前一事件已经打开菜单时，只抑制紧随其后的原生菜单，避免重复渲染。
+    if (
+      Date.now() - lastSecondaryMenuOpenAt < 500
+      && els.body.contains(event.target)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    openBlockContextMenuFromEvent(event, "contextmenu");
+  };
+  // Zotero Reader 自身也在捕获阶段同时使用 pointerdown 和 mousedown。
+  // 这里复用同一路径，并保留 contextmenu 以支持键盘菜单键和触控板。
+  state.win.addEventListener("pointerdown", onBlockSecondaryDown, true);
+  state.win.addEventListener("mousedown", onBlockSecondaryDown, true);
+  state.win.addEventListener("contextmenu", onBlockContextMenu, true);
+
+  els.blockContextMenu.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button || button.disabled) return;
+    const block = state.blockById.get(state.contextBlockId);
+    const action = button.dataset.action;
+    closeBlockContextMenu(state);
+    if (!block) return;
+
+    if (action === "copy-original") {
+      copyBlockText(state, originalBlockText(block), "原文").catch((error) => {
+        setFooter(state, `复制原文失败：${error.message || error}`);
+      });
+    } else if (action === "copy-translation") {
+      copyBlockText(state, state.translations[block.id], "译文").catch((error) => {
+        setFooter(state, `复制译文失败：${error.message || error}`);
+      });
+    } else if (action === "retranslate") {
+      retranslateBlock(state, block);
+    } else if (action === "edit") {
+      editBlockContent(state, block);
+    } else if (action === "locate") {
+      navigateToBlock(state, block);
+    }
+  });
+
   // 点击块定位并短暂高亮 PDF 原文；用户在面板内选择文本时不触发
   els.body.addEventListener("click", (event) => {
+    if (event.target.closest(".pt-block-editor")) return;
     if (state.win.getSelection()?.toString()) return;
     const section = event.target.closest("section[data-id][data-page]");
     if (!section) {
@@ -1441,17 +2216,44 @@ function attachPanelEvents(state) {
     navigateToBlock(state, state.blockById.get(section.getAttribute("data-id")));
   });
 
-  const onScroll = () => scheduleVisibleTranslation(state);
+  const onScroll = () => {
+    closeBlockContextMenu(state, "scroll");
+    scheduleVisibleTranslation(state);
+  };
   els.body.addEventListener("scroll", onScroll, { passive: true });
-  const onWindowResize = () => resizePanelToWorkspace(state);
+  const onWindowResize = () => {
+    closeBlockContextMenu(state, "resize");
+    resizePanelToWorkspace(state);
+  };
   state.win.addEventListener("resize", onWindowResize);
+  const onDocumentPointerDown = (event) => {
+    if (
+      event.button === 0
+      && !els.blockContextMenu.hidden
+      && !els.blockContextMenu.contains(event.target)
+    ) {
+      closeBlockContextMenu(state, "pointerdown");
+    }
+  };
+  const onDocumentKeyDown = (event) => {
+    if (event.key === "Escape" && !els.blockContextMenu.hidden) {
+      closeBlockContextMenu(state, "escape");
+    }
+  };
+  state.doc.addEventListener("pointerdown", onDocumentPointerDown, true);
+  state.doc.addEventListener("keydown", onDocumentKeyDown, true);
   const workspaceResizeObserver = state.win.ResizeObserver && state.workspace
     ? new state.win.ResizeObserver(() => resizePanelToWorkspace(state))
     : null;
   workspaceResizeObserver?.observe(state.workspace);
   state.eventCleanup = () => {
+    state.win.removeEventListener("pointerdown", onBlockSecondaryDown, true);
+    state.win.removeEventListener("mousedown", onBlockSecondaryDown, true);
+    state.win.removeEventListener("contextmenu", onBlockContextMenu, true);
     els.body.removeEventListener("scroll", onScroll);
     state.win.removeEventListener("resize", onWindowResize);
+    state.doc.removeEventListener("pointerdown", onDocumentPointerDown, true);
+    state.doc.removeEventListener("keydown", onDocumentKeyDown, true);
     workspaceResizeObserver?.disconnect();
   };
 }
@@ -1572,6 +2374,8 @@ async function togglePanel(reader) {
     blocks: [],
     blockById: new Map(),
     translations: {},
+    sourceOverrides: {},
+    pendingSourceTranslationIds: new Set(),
     eligibleIds: new Set(),
     manifest: null,
     dir: null,
@@ -1591,13 +2395,16 @@ async function togglePanel(reader) {
     autoTranslateFailed: false,
     autoTranslateQueued: new Set(),
     translatingIds: new Set(),
+    sourceRetranslateTimer: null,
     autoParseOnOpen: true,
     selectedBlockId: null,
+    contextBlockId: null,
     pdfContextBindTimer: null,
     pdfContextContainer: null,
     pdfContextHandler: null,
     pdfContextPoint: null,
     pdfAutoZoomTimer: null,
+    pdfAutoZoomRequestId: 0,
     pdfHighlightAttemptTimer: null,
     pdfCenterTimer: null,
     pdfHighlightNode: null

@@ -52,7 +52,9 @@ function isPageNumberBlock(block, text, pageSize) {
 }
 
 export function normalizeBlock(block, index, pageSize = null) {
-  if (["aside_text", "page_footnote"].includes(block.type)) return null;
+  // MinerU 会把每页重复出现的运行页眉标记为 header；它们不属于论文
+  // 正文，也不应进入重排面板或翻译队列。
+  if (["aside_text", "page_footnote", "header"].includes(block.type)) return null;
   const text = contentBlockText(block);
   const isMedia = ["image", "table", "chart"].includes(block.type);
   if (!isMedia && !text) return null;

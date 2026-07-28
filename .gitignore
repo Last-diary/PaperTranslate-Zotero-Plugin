@@ -1,5 +1,6 @@
 *.xpi
 *.log
+.references/
 
 .DS_Store
 Thumbs.db
