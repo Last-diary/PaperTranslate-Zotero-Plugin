@@ -2,6 +2,8 @@
 // 差异：签名用 FNV-1a 替代 sha1；缓存读写走 IOUtils。
 
 import { getConfig } from "./config.mjs";
+import { chatCompletionText } from "./llm/openaiCompatible.mjs";
+import { createLlmProvider } from "./llm/provider.mjs";
 import { readJson, writeJson, tocEnhancementPath } from "./storage.mjs";
 import { extractJson } from "./deepseek.mjs";
 import { fnv1a64Hex } from "./utils.mjs";
@@ -75,15 +77,10 @@ async function writeTocEnhancement(dir, signature, items, model) {
 }
 
 export class TocEnhancer {
-  async enhanceWithDeepSeek(headings) {
+  async enhanceWithLlm(headings) {
     const config = getConfig();
-    if (!config.deepseek.apiKey) {
-      throw new Error("缺少 DeepSeek API Key，无法执行目录增强。");
-    }
-
-    const payload = {
-      model: config.deepseek.model,
-      thinking: { type: config.deepseek.thinkingEnabled ? "enabled" : "disabled" },
+    const provider = createLlmProvider(config.llm);
+    const data = await provider.createChatCompletion({
       temperature: 0.1,
       messages: [
         {
@@ -109,29 +106,10 @@ export class TocEnhancer {
           })
         }
       ]
-    };
-
-    if (config.deepseek.jsonMode !== false) {
-      payload.response_format = { type: "json_object" };
-    }
-
-    const response = await fetch(`${config.deepseek.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "authorization": `Bearer ${config.deepseek.apiKey}`
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`DeepSeek 目录增强请求失败：${response.status} ${body.slice(0, 500)}`);
-    }
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    }, { json: true });
+    const content = chatCompletionText(data);
     const parsed = extractJson(content);
-    if (!Array.isArray(parsed.items)) throw new Error("DeepSeek 目录增强 JSON 缺少 items 数组。");
+    if (!Array.isArray(parsed.items)) throw new Error("大模型目录增强 JSON 缺少 items 数组。");
     const knownIds = new Set(headings.map((item) => item.id));
     return parsed.items
       .filter((item) => item && knownIds.has(item.id))
@@ -169,8 +147,8 @@ export class TocEnhancer {
         return { blocks: applyTocEnhancement(blocks, cached.items), status };
       }
 
-      const items = await this.enhanceWithDeepSeek(headings);
-      const saved = await writeTocEnhancement(dir, signature, items, config.deepseek.model);
+      const items = await this.enhanceWithLlm(headings);
+      const saved = await writeTocEnhancement(dir, signature, items, config.llm.settings.model);
       status.applied = true;
       status.saved = true;
       return { blocks: applyTocEnhancement(blocks, saved.items), status };

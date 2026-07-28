@@ -25,14 +25,36 @@ function getInt(key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function getReadingFontSize() {
+  const value = getInt("reading.fontSize", 14);
+  return [12, 13, 14, 15, 16, 18, 20].includes(value) ? value : 14;
+}
+
 export function getConfig() {
+  const textAlign = getString("reading.textAlign", "justify");
+  const provider = getString("llm.provider", "deepseek").trim().toLowerCase() || "deepseek";
+  const deepseek = {
+    apiKey: getString("deepseek.apiKey").trim(),
+    baseUrl: getString("deepseek.baseUrl", "https://api.deepseek.com").trim() || "https://api.deepseek.com",
+    model: getString("deepseek.model", "deepseek-v4-flash").trim() || "deepseek-v4-flash",
+    thinkingEnabled: getBool("deepseek.thinkingEnabled", false),
+    jsonMode: getBool("deepseek.jsonMode", true)
+  };
+  const openaiCompatible = {
+    apiKey: getString("openaiCompatible.apiKey").trim(),
+    baseUrl: getString("openaiCompatible.baseUrl").trim(),
+    model: getString("openaiCompatible.model").trim()
+  };
+  const providers = {
+    deepseek,
+    openai_compatible: openaiCompatible
+  };
   return {
-    deepseek: {
-      apiKey: getString("deepseek.apiKey").trim(),
-      baseUrl: getString("deepseek.baseUrl", "https://api.deepseek.com").trim() || "https://api.deepseek.com",
-      model: getString("deepseek.model", "deepseek-v4-flash").trim() || "deepseek-v4-flash",
-      thinkingEnabled: getBool("deepseek.thinkingEnabled", false),
-      jsonMode: getBool("deepseek.jsonMode", true)
+    llm: {
+      provider,
+      protocol: "openai_chat_compat",
+      settings: providers[provider] || {},
+      providers
     },
     mineru: {
       apiKey: getString("mineru.apiKey").trim(),
@@ -49,6 +71,11 @@ export function getConfig() {
       translateReferences: getBool("translation.translateReferences", false),
       translateSupplement: getBool("translation.translateSupplement", false),
       translateAuthors: getBool("translation.translateAuthors", false)
+    },
+    reading: {
+      textAlign: textAlign === "left" ? "left" : "justify",
+      fontSize: getReadingFontSize(),
+      betterReading: getBool("reading.betterReading", true)
     },
     tocEnhancement: {
       enabled: getBool("toc.enabled", true),

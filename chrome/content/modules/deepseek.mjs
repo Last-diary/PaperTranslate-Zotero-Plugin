@@ -1,14 +1,16 @@
-// DeepSeek 翻译服务（移植自原项目 server/translation.js 与 server/routes.js 中的测试逻辑）
-// 差异：缓存读写走 IOUtils；配置从 Zotero 偏好读取。
+// 论文翻译服务（移植自原项目 server/translation.js）。
+// 大模型请求通过 Provider 适配层发送；缓存读写走 IOUtils。
 
 import { getConfig } from "./config.mjs";
+import { chatCompletionText } from "./llm/openaiCompatible.mjs";
+import { createLlmProvider } from "./llm/provider.mjs";
 import { readJson, writeJson, translationsPath } from "./storage.mjs";
 
 export function extractJson(text) {
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) return JSON.parse(trimmed);
   const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/) || trimmed.match(/(\{[\s\S]*\})/);
-  if (!match) throw new Error("DeepSeek 没有返回 JSON。");
+  if (!match) throw new Error("大模型没有返回 JSON。");
   return JSON.parse(match[1]);
 }
 
@@ -177,12 +179,8 @@ export function eligibleTranslationIds(blocks, settings = {}) {
 export class TranslationService {
   async translateChunk(chunk) {
     const config = getConfig();
-    const apiKey = config.deepseek.apiKey;
-    if (!apiKey) throw new Error("请先在 设置 → PaperTranslate 中填写 DeepSeek API Key。");
-
-    const payload = {
-      model: config.deepseek.model,
-      thinking: { type: config.deepseek.thinkingEnabled ? "enabled" : "disabled" },
+    const provider = createLlmProvider(config.llm);
+    const data = await provider.createChatCompletion({
       temperature: 0.2,
       messages: [
         {
@@ -202,29 +200,10 @@ export class TranslationService {
           })
         }
       ]
-    };
-
-    if (config.deepseek.jsonMode !== false) {
-      payload.response_format = { type: "json_object" };
-    }
-
-    const response = await fetch(`${config.deepseek.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`DeepSeek 请求失败：${response.status} ${body.slice(0, 500)}`);
-    }
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    }, { json: true });
+    const content = chatCompletionText(data);
     const parsed = extractJson(content);
-    if (!Array.isArray(parsed.translations)) throw new Error("DeepSeek JSON 缺少 translations 数组。");
+    if (!Array.isArray(parsed.translations)) throw new Error("大模型 JSON 缺少 translations 数组。");
     return parsed.translations;
   }
 
@@ -255,37 +234,4 @@ export class TranslationService {
 
     return { translated, translations: cache };
   }
-}
-
-// 设置页“测试 DeepSeek”按钮（移植自 server/routes.js）
-export async function testDeepSeekSettings(deepseek = {}) {
-  const apiKey = String(deepseek.apiKey || "").trim();
-  const model = String(deepseek.model || "").trim();
-  const baseUrl = String(deepseek.baseUrl || "https://api.deepseek.com").trim().replace(/\/$/, "");
-  if (!apiKey) throw new Error("请先填写 DeepSeek API Key。");
-  if (!model) throw new Error("请先填写 DeepSeek 模型。");
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_tokens: 4,
-      messages: [
-        { role: "system", content: "Reply with ok." },
-        { role: "user", content: "test" }
-      ]
-    })
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`DeepSeek 测试失败：${response.status} ${text.slice(0, 300)}`);
-  }
-  const data = text ? JSON.parse(text) : {};
-  if (!data.choices?.length) throw new Error("DeepSeek 响应中没有 choices。");
-  return { message: `DeepSeek 测试通过：${model}` };
 }

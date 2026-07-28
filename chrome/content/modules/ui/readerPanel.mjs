@@ -450,6 +450,28 @@ function el(doc, tag, cssText) {
   return node;
 }
 
+function applyReadingPreferences(state, reading) {
+  const fontSize = Number(reading?.fontSize);
+  const safeFontSize = [12, 13, 14, 15, 16, 18, 20].includes(fontSize)
+    ? fontSize
+    : 14;
+  const textAlign = reading?.textAlign === "left" ? "left" : "justify";
+  state.reading = {
+    textAlign,
+    fontSize: safeFontSize,
+    betterReading: reading?.betterReading !== false
+  };
+  state.els.root.style.setProperty("--pt-reading-font-size", `${safeFontSize}px`);
+  state.els.root.style.setProperty("--pt-reading-text-align", textAlign);
+  // 同时写到正文容器，避免 Reader 内嵌文档的旧样式或紧凑布局规则
+  // 覆盖根节点上的 CSS 变量。重新加载面板时始终以当前偏好为准。
+  state.els.body.style.setProperty("font-size", `${safeFontSize}px`, "important");
+  state.els.body.style.setProperty("text-align", textAlign);
+  ctx.Zotero?.debug?.(
+    `[PaperTranslate][reading-prefs-v2] fontSize=${safeFontSize}px textAlign=${textAlign}`
+  );
+}
+
 function ensurePanelStyles(doc) {
   if (styledDocuments.has(doc)) return;
   // Reader 文档位于另一个 privileged compartment。读取 adoptedStyleSheets
@@ -1982,6 +2004,8 @@ async function reloadPanelInner(state) {
     setFooter(state, "无法读取当前附件。");
     return;
   }
+  const config = getConfig();
+  applyReadingPreferences(state, config.reading);
   const dir = storage.itemDir(attachment);
   state.dir = dir;
   const manifest = await storage.readManifest(attachment);
@@ -2022,8 +2046,9 @@ async function reloadPanelInner(state) {
     return;
   }
 
-  let blocks = await loadBlocks(dir, manifest);
-  const config = getConfig();
+  let blocks = await loadBlocks(dir, manifest, {
+    hideNonBody: config.reading.betterReading
+  });
   if (config.tocEnhancement.enabled && blocks.length) {
     const result = await new TocEnhancer().maybeEnhance(dir, blocks);
     blocks = result.blocks;
@@ -2374,6 +2399,7 @@ async function togglePanel(reader) {
     blocks: [],
     blockById: new Map(),
     translations: {},
+    reading: null,
     sourceOverrides: {},
     pendingSourceTranslationIds: new Set(),
     eligibleIds: new Set(),

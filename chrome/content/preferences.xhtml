@@ -1,131 +1,267 @@
 <vbox xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
-      xmlns:html="http://www.w3.org/1999/xhtml">
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      onload="PaperTranslate_Preferences.init()">
 
-  <groupbox>
-    <label><html:h2>DeepSeek</html:h2></label>
-    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:span style="min-width:110px;">API Key</html:span>
-        <html:input type="password" style="flex:1;" autocomplete="off" placeholder="sk-..."
+  <groupbox aria-labelledby="papertranslate-preferences-reading-title">
+    <label><html:h2 id="papertranslate-preferences-reading-title">阅读</html:h2></label>
+
+    <hbox align="center">
+      <label value="对齐方式" control="papertranslate-preferences-text-align"/>
+      <menulist id="papertranslate-preferences-text-align"
+                preference="extensions.papertranslate.reading.textAlign"
+                native="true">
+        <menupopup>
+          <menuitem label="左对齐" value="left"/>
+          <menuitem label="两端对齐（默认）" value="justify"/>
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <hbox align="center">
+      <label value="字号" control="papertranslate-preferences-font-size"/>
+      <menulist id="papertranslate-preferences-font-size"
+                preference="extensions.papertranslate.reading.fontSize"
+                native="true">
+        <menupopup>
+          <menuitem label="12 px" value="12"/>
+          <menuitem label="13 px" value="13"/>
+          <menuitem label="14 px（默认）" value="14"/>
+          <menuitem label="15 px" value="15"/>
+          <menuitem label="16 px" value="16"/>
+          <menuitem label="18 px" value="18"/>
+          <menuitem label="20 px" value="20"/>
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <checkbox label="更好的阅读体验"
+              preference="extensions.papertranslate.reading.betterReading"
+              native="true"/>
+    <description>
+      隐藏页眉、页脚、页码、脚注等非正文信息（默认开启）。
+    </description>
+    <description>
+      阅读设置会在重新打开或重新加载 Reader 面板后生效。
+    </description>
+  </groupbox>
+
+  <groupbox aria-labelledby="papertranslate-preferences-translation-title">
+    <label><html:h2 id="papertranslate-preferences-translation-title">翻译</html:h2></label>
+    <vbox>
+      <checkbox label="翻译作者名单（默认跳过标题与摘要之间的作者、机构、邮箱信息）"
+                preference="extensions.papertranslate.translation.translateAuthors"
+                native="true"/>
+      <checkbox label="翻译引用章节（默认跳过 References、Bibliography 等章节）"
+                preference="extensions.papertranslate.translation.translateReferences"
+                native="true"/>
+      <checkbox label="翻译补充材料（默认跳过 Supplementary Materials、Appendix 等章节）"
+                preference="extensions.papertranslate.translation.translateSupplement"
+                native="true"/>
+    </vbox>
+  </groupbox>
+
+  <groupbox aria-labelledby="papertranslate-preferences-llm-title"
+            aria-describedby="papertranslate-preferences-llm-provider-description">
+    <label><html:h2 id="papertranslate-preferences-llm-title">大模型 API</html:h2></label>
+
+    <hbox align="center">
+      <label value="服务商" control="papertranslate-preferences-llm-provider"/>
+      <menulist id="papertranslate-preferences-llm-provider"
+                preference="extensions.papertranslate.llm.provider"
+                native="true">
+        <menupopup>
+          <menuitem label="DeepSeek" value="deepseek"/>
+          <menuitem label="OpenAI-compatible" value="openai_compatible"/>
+        </menupopup>
+      </menulist>
+    </hbox>
+    <label id="papertranslate-preferences-llm-provider-description"/>
+
+    <vbox id="papertranslate-preferences-deepseek-settings">
+      <hbox align="center">
+        <label value="API Key" control="papertranslate-preferences-deepseek-api-key"/>
+        <html:input id="papertranslate-preferences-deepseek-api-key"
+                    type="password"
+                    style="flex:1;"
+                    autocomplete="off"
+                    placeholder="sk-..."
                     preference="extensions.papertranslate.deepseek.apiKey"/>
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:span style="min-width:110px;">Base URL</html:span>
-        <html:input type="text" style="flex:1;" placeholder="https://api.deepseek.com"
+      </hbox>
+      <hbox align="center">
+        <label value="Base URL" control="papertranslate-preferences-deepseek-base-url"/>
+        <html:input id="papertranslate-preferences-deepseek-base-url"
+                    type="text"
+                    style="flex:1;"
+                    placeholder="https://api.deepseek.com"
                     preference="extensions.papertranslate.deepseek.baseUrl"/>
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:span style="min-width:110px;">模型</html:span>
-        <html:input type="text" style="flex:1;" placeholder="deepseek-v4-flash"
+      </hbox>
+      <hbox align="center">
+        <label value="模型" control="papertranslate-preferences-deepseek-model"/>
+        <html:input id="papertranslate-preferences-deepseek-model"
+                    type="text"
+                    style="flex:1;"
+                    placeholder="deepseek-v4-flash"
                     preference="extensions.papertranslate.deepseek.model"/>
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.deepseek.thinkingEnabled"/>
-        启用思考模式（翻译建议关闭，避免额外推理耗时）
-      </html:label>
-      <html:div style="display:flex; align-items:center; gap:10px;">
-        <html:button id="papertranslate-test-deepseek">测试 DeepSeek</html:button>
-        <html:span id="papertranslate-test-deepseek-status" style="opacity:.8;"></html:span>
-      </html:div>
-    </html:div>
+      </hbox>
+      <checkbox id="papertranslate-preferences-deepseek-thinking-enabled"
+                label="允许思考（翻译建议关闭，避免额外推理耗时）"
+                preference="extensions.papertranslate.deepseek.thinkingEnabled"
+                native="true"/>
+    </vbox>
+
+    <vbox id="papertranslate-preferences-openai-compatible-settings" hidden="true">
+      <hbox align="center">
+        <label value="API Key" control="papertranslate-preferences-openai-compatible-api-key"/>
+        <html:input id="papertranslate-preferences-openai-compatible-api-key"
+                    type="password"
+                    style="flex:1;"
+                    autocomplete="off"
+                    placeholder="本地服务可留空"
+                    preference="extensions.papertranslate.openaiCompatible.apiKey"/>
+      </hbox>
+      <hbox align="center">
+        <label value="Base URL" control="papertranslate-preferences-openai-compatible-base-url"/>
+        <html:input id="papertranslate-preferences-openai-compatible-base-url"
+                    type="text"
+                    style="flex:1;"
+                    placeholder="https://api.example.com/v1"
+                    preference="extensions.papertranslate.openaiCompatible.baseUrl"/>
+      </hbox>
+      <hbox align="center">
+        <label value="模型" control="papertranslate-preferences-openai-compatible-model"/>
+        <html:input id="papertranslate-preferences-openai-compatible-model"
+                    type="text"
+                    style="flex:1;"
+                    placeholder="provider-model-name"
+                    preference="extensions.papertranslate.openaiCompatible.model"/>
+      </hbox>
+    </vbox>
+
+    <hbox align="center">
+      <button id="papertranslate-test-llm" label="测试连接"/>
+      <label id="papertranslate-test-llm-status"/>
+    </hbox>
   </groupbox>
 
-  <groupbox>
-    <label><html:h2>MinerU</html:h2></label>
-    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:span style="min-width:110px;">API Token</html:span>
-        <html:input type="password" style="flex:1;" autocomplete="off"
-                    preference="extensions.papertranslate.mineru.apiKey"/>
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:span style="min-width:110px;">Base URL</html:span>
-        <html:input type="text" style="flex:1;" placeholder="https://mineru.net/api/v4"
-                    preference="extensions.papertranslate.mineru.baseUrl"/>
-      </html:label>
-      <html:div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          模型版本
-          <html:input type="text" style="width:80px;" placeholder="vlm"
-                      preference="extensions.papertranslate.mineru.modelVersion"/>
-        </html:label>
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          语言
-          <html:input type="text" style="width:60px;" placeholder="ch"
-                      preference="extensions.papertranslate.mineru.language"/>
-        </html:label>
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          轮询间隔 ms
-          <html:input type="number" style="width:90px;" min="1000" step="500"
-                      preference="extensions.papertranslate.mineru.pollIntervalMs"/>
-        </html:label>
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          超时 ms
-          <html:input type="number" style="width:110px;" min="30000" step="10000"
-                      preference="extensions.papertranslate.mineru.timeoutMs"/>
-        </html:label>
-      </html:div>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.mineru.isOcr"/>
-        对扫描件启用 OCR
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.mineru.enableFormula"/>
-        启用公式识别
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.mineru.enableTable"/>
-        启用表格识别
-      </html:label>
-      <html:div style="display:flex; align-items:center; gap:10px;">
-        <html:button id="papertranslate-test-mineru">测试 MinerU</html:button>
-        <html:span id="papertranslate-test-mineru-status" style="opacity:.8;"></html:span>
-      </html:div>
-    </html:div>
+  <groupbox aria-labelledby="papertranslate-preferences-mineru-title">
+    <label><html:h2 id="papertranslate-preferences-mineru-title">MinerU</html:h2></label>
+
+    <hbox align="center">
+      <label value="API Token" control="papertranslate-preferences-mineru-api-key"/>
+      <html:input id="papertranslate-preferences-mineru-api-key"
+                  type="password"
+                  style="flex:1;"
+                  autocomplete="off"
+                  preference="extensions.papertranslate.mineru.apiKey"/>
+    </hbox>
+    <hbox align="center">
+      <label value="Base URL" control="papertranslate-preferences-mineru-base-url"/>
+      <html:input id="papertranslate-preferences-mineru-base-url"
+                  type="text"
+                  style="flex:1;"
+                  placeholder="https://mineru.net/api/v4"
+                  preference="extensions.papertranslate.mineru.baseUrl"/>
+    </hbox>
+    <hbox align="center">
+      <label value="模型版本" control="papertranslate-preferences-mineru-model-version"/>
+      <html:input id="papertranslate-preferences-mineru-model-version"
+                  type="text"
+                  size="8"
+                  placeholder="vlm"
+                  preference="extensions.papertranslate.mineru.modelVersion"/>
+    </hbox>
+    <hbox align="center">
+      <label value="语言" control="papertranslate-preferences-mineru-language"/>
+      <html:input id="papertranslate-preferences-mineru-language"
+                  type="text"
+                  size="6"
+                  placeholder="ch"
+                  preference="extensions.papertranslate.mineru.language"/>
+    </hbox>
+    <hbox align="center">
+      <label value="轮询间隔（毫秒）" control="papertranslate-preferences-mineru-poll-interval"/>
+      <html:input id="papertranslate-preferences-mineru-poll-interval"
+                  type="number"
+                  size="10"
+                  min="1000"
+                  step="500"
+                  preference="extensions.papertranslate.mineru.pollIntervalMs"/>
+    </hbox>
+    <hbox align="center">
+      <label value="超时（毫秒）" control="papertranslate-preferences-mineru-timeout"/>
+      <html:input id="papertranslate-preferences-mineru-timeout"
+                  type="number"
+                  size="12"
+                  min="30000"
+                  step="10000"
+                  preference="extensions.papertranslate.mineru.timeoutMs"/>
+    </hbox>
+    <vbox>
+      <checkbox label="对扫描件启用 OCR"
+                preference="extensions.papertranslate.mineru.isOcr"
+                native="true"/>
+      <checkbox label="启用公式识别"
+                preference="extensions.papertranslate.mineru.enableFormula"
+                native="true"/>
+      <checkbox label="启用表格识别"
+                preference="extensions.papertranslate.mineru.enableTable"
+                native="true"/>
+    </vbox>
+    <hbox align="center">
+      <button id="papertranslate-test-mineru" label="测试 MinerU"/>
+      <label id="papertranslate-test-mineru-status"/>
+    </hbox>
   </groupbox>
 
-  <groupbox>
-    <label><html:h2>翻译</html:h2></label>
-    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateAuthors"/>
-        翻译作者名单（默认跳过标题与摘要之间的作者、机构、邮箱信息）
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateReferences"/>
-        翻译引用章节（默认跳过 References、Bibliography 等章节）
-      </html:label>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.translation.translateSupplement"/>
-        翻译补充材料（默认跳过 Supplementary Materials、Appendix 等章节）
-      </html:label>
-    </html:div>
+  <groupbox hidden="true"
+            aria-labelledby="papertranslate-preferences-toc-title">
+    <label><html:h2 id="papertranslate-preferences-toc-title">目录增强</html:h2></label>
+    <checkbox label="对 PDF 中没有可靠目录的论文使用大模型目录增强"
+              preference="extensions.papertranslate.toc.enabled"
+              native="true"/>
+    <hbox align="center">
+      <label value="最少标题数" control="papertranslate-preferences-toc-min-headings"/>
+      <html:input id="papertranslate-preferences-toc-min-headings"
+                  type="number"
+                  size="7"
+                  min="0"
+                  step="1"
+                  preference="extensions.papertranslate.toc.minHeadings"/>
+    </hbox>
+    <hbox align="center">
+      <label value="最多标题数" control="papertranslate-preferences-toc-max-headings"/>
+      <html:input id="papertranslate-preferences-toc-max-headings"
+                  type="number"
+                  size="8"
+                  min="1"
+                  step="1"
+                  preference="extensions.papertranslate.toc.maxHeadings"/>
+    </hbox>
+    <checkbox label="强制刷新目录增强（忽略已有缓存）"
+              preference="extensions.papertranslate.toc.forceRefresh"
+              native="true"/>
   </groupbox>
 
-  <groupbox hidden="true">
-    <label><html:h2>目录增强</html:h2></label>
-    <html:div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.toc.enabled"/>
-        对 PDF 中没有可靠目录的论文使用 DeepSeek 目录增强
-      </html:label>
-      <html:div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          最少标题数
-          <html:input type="number" style="width:70px;" min="0" step="1"
-                      preference="extensions.papertranslate.toc.minHeadings"/>
-        </html:label>
-        <html:label style="display:flex; align-items:center; gap:6px;">
-          最多标题数
-          <html:input type="number" style="width:80px;" min="1" step="1"
-                      preference="extensions.papertranslate.toc.maxHeadings"/>
-        </html:label>
-      </html:div>
-      <html:label style="display:flex; align-items:center; gap:8px;">
-        <html:input type="checkbox" preference="extensions.papertranslate.toc.forceRefresh"/>
-        强制刷新目录增强（忽略已有缓存）
-      </html:label>
-    </html:div>
+  <groupbox aria-labelledby="papertranslate-preferences-data-title"
+            aria-describedby="papertranslate-preferences-data-description">
+    <label><html:h2 id="papertranslate-preferences-data-title">数据</html:h2></label>
+    <hbox align="center">
+      <label value="当前占用空间："
+             control="papertranslate-storage-usage"/>
+      <label id="papertranslate-storage-usage">计算中…</label>
+      <button id="papertranslate-refresh-storage-usage"
+              label="重新计算"/>
+    </hbox>
+    <label id="papertranslate-preferences-data-description">
+      只清除 PaperTranslate 的本地缓存，不会删除 Zotero 条目或原始 PDF。
+    </label>
+    <hbox>
+      <button id="papertranslate-clear-translations"
+              label="清除所有翻译缓存"/>
+      <button id="papertranslate-clear-all-data"
+              label="清除所有解析和翻译缓存"/>
+    </hbox>
+    <label id="papertranslate-clear-data-status"/>
   </groupbox>
 
 </vbox>

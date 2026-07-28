@@ -6,6 +6,10 @@ pref("extensions.papertranslate.deepseek.baseUrl", "https://api.deepseek.com");
 pref("extensions.papertranslate.deepseek.model", "deepseek-v4-flash");
 pref("extensions.papertranslate.deepseek.thinkingEnabled", false);
 pref("extensions.papertranslate.deepseek.jsonMode", true);
+pref("extensions.papertranslate.llm.provider", "deepseek");
+pref("extensions.papertranslate.openaiCompatible.apiKey", "");
+pref("extensions.papertranslate.openaiCompatible.baseUrl", "");
+pref("extensions.papertranslate.openaiCompatible.model", "");
 
 pref("extensions.papertranslate.mineru.apiKey", "");
 pref("extensions.papertranslate.mineru.baseUrl", "https://mineru.net/api/v4");
@@ -21,6 +25,10 @@ pref("extensions.papertranslate.mineru.timeoutMs", "600000");
 pref("extensions.papertranslate.translation.translateReferences", false);
 pref("extensions.papertranslate.translation.translateSupplement", false);
 pref("extensions.papertranslate.translation.translateAuthors", false);
+
+pref("extensions.papertranslate.reading.textAlign", "justify");
+pref("extensions.papertranslate.reading.fontSize", "14");
+pref("extensions.papertranslate.reading.betterReading", true);
 
 pref("extensions.papertranslate.toc.enabled", true);
 pref("extensions.papertranslate.toc.forceRefresh", false);

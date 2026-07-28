@@ -4,6 +4,16 @@
 import { fnv1a64Hex } from "./utils.mjs";
 import { readJson } from "./storage.mjs";
 
+const NON_BODY_BLOCK_TYPES = new Set([
+  "aside_text",
+  "page_footnote",
+  "header",
+  "footer",
+  "page_header",
+  "page_footer",
+  "page_number"
+]);
+
 function stripHeading(text) {
   return String(text || "").replace(/^#{1,6}\s+/, "").trim();
 }
@@ -51,16 +61,21 @@ function isPageNumberBlock(block, text, pageSize) {
   return nearPageEdge && smallStandaloneBox;
 }
 
-export function normalizeBlock(block, index, pageSize = null) {
-  // MinerU 会把每页重复出现的运行页眉标记为 header；它们不属于论文
-  // 正文，也不应进入重排面板或翻译队列。
-  if (["aside_text", "page_footnote", "header"].includes(block.type)) return null;
+export function normalizeBlock(
+  block,
+  index,
+  pageSize = null,
+  { hideNonBody = true } = {}
+) {
+  // “更好的阅读体验”默认隐藏 MinerU 标记出的非正文块。关闭后保留这些
+  // 块供 Reader 面板显示；is_discarded 仍始终排除，因为它表示解析器已判废。
+  if (hideNonBody && NON_BODY_BLOCK_TYPES.has(block.type)) return null;
   const text = contentBlockText(block);
   const isMedia = ["image", "table", "chart"].includes(block.type);
   if (!isMedia && !text) return null;
   if (block.is_discarded) return null;
   const resolvedPageSize = pageSize || (Array.isArray(block.page_size) ? block.page_size : [1000, 1000]);
-  if (isPageNumberBlock(block, text, resolvedPageSize)) return null;
+  if (hideNonBody && isPageNumberBlock(block, text, resolvedPageSize)) return null;
   const blockPosition = block.block_position || `${block.page_idx || 0}-${index}`;
   const id = fnv1a64Hex(`${block.id || ""}:${blockPosition}:${index}`);
   const rawPath = block.img_path || "";
@@ -99,7 +114,7 @@ async function pickContentFile(dir, manifest = null) {
   return names.find((name) => name.endsWith("_content_list.json")) || "";
 }
 
-export async function loadBlocks(dir, manifest = null) {
+export async function loadBlocks(dir, manifest = null, { hideNonBody = true } = {}) {
   const contentFile = await pickContentFile(dir, manifest);
   if (contentFile) {
     const data = await readJson(PathUtils.join(dir, contentFile), []);
@@ -108,7 +123,7 @@ export async function loadBlocks(dir, manifest = null) {
       .map((block, index) => normalizeBlock({
         ...block,
         block_position: `${block.page_idx || 0}-${index}`
-      }, index, [1000, 1000]))
+      }, index, [1000, 1000], { hideNonBody }))
       .filter(Boolean);
   }
 
@@ -116,7 +131,12 @@ export async function loadBlocks(dir, manifest = null) {
   if (blockList) {
     const pages = Array.isArray(blockList.pdfData) ? blockList.pdfData : [];
     return pages
-      .flatMap((page, pageIndex) => page.map((block, blockIndex) => normalizeBlock({ ...block, page_idx: block.page_idx ?? pageIndex }, blockIndex)))
+      .flatMap((page, pageIndex) => page.map((block, blockIndex) => normalizeBlock(
+        { ...block, page_idx: block.page_idx ?? pageIndex },
+        blockIndex,
+        null,
+        { hideNonBody }
+      )))
       .filter(Boolean);
   }
 

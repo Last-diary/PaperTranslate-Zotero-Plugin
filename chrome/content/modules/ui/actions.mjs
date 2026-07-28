@@ -133,6 +133,48 @@ export async function parseAndTranslateAttachment(attachment, { force = false } 
   });
 }
 
+export async function clearAttachmentsTranslationCaches(attachments) {
+  const targets = Array.from(attachments || []);
+  return runWithProgress("PaperTranslate 删除翻译缓存", async (update) => {
+    let removed = 0;
+    for (let index = 0; index < targets.length; index++) {
+      update(`正在删除翻译缓存… ${index + 1}/${targets.length} 篇`);
+      const result = await storage.clearItemTranslationCache(targets[index]);
+      if (result.removed) removed++;
+    }
+    if (targets.length === 1) {
+      const title = attachmentDisplayTitle(targets[0]);
+      return removed
+        ? `已删除翻译缓存：${title}`
+        : `没有可删除的翻译缓存：${title}`;
+    }
+    return removed
+      ? `已删除 ${removed} 篇论文的翻译缓存；${targets.length - removed} 篇没有翻译缓存。`
+      : `选中的 ${targets.length} 篇论文都没有可删除的翻译缓存。`;
+  });
+}
+
+export async function clearAttachmentsPaperTranslateData(attachments) {
+  const targets = Array.from(attachments || []);
+  return runWithProgress("PaperTranslate 删除解析和翻译缓存", async (update) => {
+    let removed = 0;
+    for (let index = 0; index < targets.length; index++) {
+      update(`正在删除解析和翻译缓存… ${index + 1}/${targets.length} 篇`);
+      const result = await storage.clearItemPaperTranslateData(targets[index]);
+      if (result.removed) removed++;
+    }
+    if (targets.length === 1) {
+      const title = attachmentDisplayTitle(targets[0]);
+      return removed
+        ? `已删除解析和翻译缓存：${title}`
+        : `没有可删除的解析或翻译缓存：${title}`;
+    }
+    return removed
+      ? `已删除 ${removed} 篇论文的解析和翻译缓存；${targets.length - removed} 篇没有相关缓存。`
+      : `选中的 ${targets.length} 篇论文都没有可删除的解析或翻译缓存。`;
+  });
+}
+
 export async function openInReader(attachment) {
   await ctx.Zotero.Reader.open(attachment.id);
 }

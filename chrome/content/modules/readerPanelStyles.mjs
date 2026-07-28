@@ -4,6 +4,7 @@ export const READER_PANEL_CSS = String.raw`
 .pt-reader-panel {
   --pt-panel:#fff; --pt-ink:#1f2933; --pt-muted:#64717f; --pt-line:#d9dee5;
   --pt-accent:#2563eb; --pt-accent-soft:#dbeafe; --pt-select:#eaf4ff; --pt-danger:#b42318;
+  --pt-reading-font-size:14px; --pt-reading-text-align:justify;
   position:relative; min-width:280px !important; height:100% !important; display:flex !important;
   flex-direction:column !important; overflow:hidden !important;
   border-left:1px solid var(--pt-line) !important; background:var(--pt-panel) !important;
@@ -70,7 +71,7 @@ body.papertranslate-panel-open #reader-ui .split-view {
 .pt-reader-panel.pt-compact .pt-pane-actions { margin-inline-start:auto; }
 .pt-reader-panel.pt-compact .pt-markdown-view {
   padding-inline:10px;
-  font-size:13px;
+  font-size:var(--pt-reading-font-size);
 }
 .pt-reader-panel.pt-compact .pt-block { padding-inline:7px; }
 .pt-content {
@@ -92,7 +93,7 @@ body.papertranslate-panel-open #reader-ui .split-view {
 .pt-toc-empty { padding:12px; color:var(--pt-muted); }
 .pt-markdown-view {
   min-width:0; width:100%; height:100%; padding:18px 22px 30vh; overflow:auto;
-  color:var(--pt-ink); background:#fff; font-size:14px; line-height:1.7;
+  color:var(--pt-ink); background:#fff; font-size:var(--pt-reading-font-size); line-height:1.7;
   overflow-wrap:break-word;
 }
 .pt-block {
@@ -171,6 +172,10 @@ body.papertranslate-panel-open #reader-ui .split-view {
 }
 .pt-reader-panel .pt-block-editor-actions button:disabled { cursor:default; opacity:.55; }
 .pt-block p { margin:0 0 .65em; }
+.pt-block p,.pt-block li {
+  text-align:var(--pt-reading-text-align);
+  text-justify:inter-ideograph;
+}
 .pt-block p:last-child { margin-bottom:0; }
 .pt-heading { margin:0; color:var(--pt-ink); line-height:1.4; }
 .pt-title { font-size:1.35em; font-weight:700; }

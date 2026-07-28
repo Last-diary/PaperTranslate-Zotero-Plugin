@@ -67,3 +67,93 @@ export async function getItemStatus(item) {
 export async function removeItemData(dir) {
   await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
 }
+
+function checkedRootDir() {
+  const dataDir = String(ctx.Zotero?.DataDirectory?.dir || "");
+  if (!dataDir) throw new Error("无法确定 Zotero 数据目录。");
+  const root = PathUtils.join(dataDir, "papertranslate");
+  if (PathUtils.parent(root) !== dataDir || PathUtils.filename(root) !== "papertranslate") {
+    throw new Error("PaperTranslate 缓存目录校验失败，已取消清除。");
+  }
+  return root;
+}
+
+function checkedItemDir(item) {
+  const root = checkedRootDir();
+  const key = String(item?.key || "").trim();
+  if (!key || key.includes("/") || key.includes("\\")) {
+    throw new Error("无法确定当前论文的缓存目录。");
+  }
+  const dir = PathUtils.join(root, key);
+  if (PathUtils.parent(dir) !== root || PathUtils.filename(dir) !== key) {
+    throw new Error("当前论文的缓存目录校验失败，已取消清除。");
+  }
+  return dir;
+}
+
+export async function clearItemTranslationCache(item) {
+  const path = translationsPath(checkedItemDir(item));
+  const existed = await IOUtils.exists(path);
+  await IOUtils.remove(path, { ignoreAbsent: true });
+  return { removed: existed };
+}
+
+export async function clearItemPaperTranslateData(item) {
+  const dir = checkedItemDir(item);
+  const existed = await IOUtils.exists(dir);
+  await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
+  return { removed: existed };
+}
+
+export async function clearAllTranslationCaches() {
+  const root = checkedRootDir();
+  const children = await IOUtils.getChildren(root).catch(() => []);
+  let removed = 0;
+  for (const child of children) {
+    const stat = await IOUtils.stat(child).catch(() => null);
+    if (stat?.type !== "directory") continue;
+    const path = translationsPath(child);
+    if (!(await IOUtils.exists(path))) continue;
+    await IOUtils.remove(path, { ignoreAbsent: true });
+    removed++;
+  }
+  return { removed };
+}
+
+export async function getPaperTranslateStorageUsage() {
+  const root = checkedRootDir();
+  if (!(await IOUtils.exists(root))) {
+    return { bytes: 0, files: 0, directories: 0, papers: 0 };
+  }
+
+  const pending = [{ path: root, depth: 0 }];
+  let bytes = 0;
+  let files = 0;
+  let directories = 0;
+  let papers = 0;
+  while (pending.length) {
+    const { path: dir, depth } = pending.pop();
+    directories++;
+    const children = await IOUtils.getChildren(dir).catch(() => []);
+    for (const child of children) {
+      const stat = await IOUtils.stat(child).catch(() => null);
+      if (!stat) continue;
+      if (stat.type === "directory") {
+        if (depth === 0 && PathUtils.filename(child) !== "tmp") papers++;
+        pending.push({ path: child, depth: depth + 1 });
+        continue;
+      }
+      files++;
+      const size = Number(stat.size);
+      if (Number.isFinite(size) && size > 0) bytes += size;
+    }
+  }
+  return { bytes, files, directories, papers };
+}
+
+export async function clearAllPaperTranslateData() {
+  const root = checkedRootDir();
+  const existed = await IOUtils.exists(root);
+  await IOUtils.remove(root, { recursive: true, ignoreAbsent: true });
+  return { removed: existed };
+}
