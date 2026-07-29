@@ -9,6 +9,10 @@ import {
 } from "./ui/menu.mjs";
 import { registerItemPane } from "./ui/itemPane.mjs";
 import { registerReader } from "./ui/readerPanel.mjs";
+import {
+  registerCacheCleanupObserver,
+  unregisterCacheCleanupObserver
+} from "./cacheCleanup.mjs";
 
 const PREFERENCE_PANE_ID = "papertranslate-preferences";
 
@@ -97,6 +101,7 @@ export const PaperTranslate = {
     registerMenus(id);
     registerItemPane(id, rootURI);
     registerReader(id);
+    registerCacheCleanupObserver();
 
     // 处理已经打开的主窗口：插件在 Zotero 运行中被启用时，
     // onMainWindowLoad 不会为现存窗口补发，需要主动执行一遍。
@@ -111,6 +116,12 @@ export const PaperTranslate = {
 
   shutdown() {
     ctx.shuttingDown = true;
+
+    try {
+      unregisterCacheCleanupObserver();
+    } catch (error) {
+      ctx.Zotero?.logError(error);
+    }
 
     try {
       unregisterMenus();

@@ -14,6 +14,11 @@ import { TocEnhancer } from "../toc.mjs";
 import { escapeHtml } from "../utils.mjs";
 import { importAttachment } from "../importer.mjs";
 import { READER_PANEL_CSS } from "../readerPanelStyles.mjs";
+import { normalizeCodeBlock } from "./codeBlock.mjs";
+import {
+  KATEX_STYLESHEET_URL,
+  prepareKatexStyles
+} from "./katexStyles.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 
 const PANEL_ID = "papertranslate-panel";
@@ -23,6 +28,7 @@ const PANEL_OPEN_CLASS = "papertranslate-panel-open";
 const PANEL_OCCUPIED_WIDTH_VAR = "--papertranslate-panel-occupied-width";
 const DEFAULT_WIDTH = 440;
 const DEFAULT_WIDTH_RATIO = 0.5;
+let katexStyles = "";
 const MIN_WIDTH = 280;
 const AUTO_TRANSLATE_DEBOUNCE_MS = 300;
 const AUTO_TRANSLATE_PREFETCH_PX = 160;
@@ -273,7 +279,11 @@ function blockBodyHtml(block, state) {
     return `<h1 class="pt-heading pt-title">${state.renderer.inline(content)}</h1>`;
   }
   if (block.type === "code") {
-    return `${renderCaptionList(block.captions, state)}<pre><code>${escapeHtml(block.codeBody || content)}</code></pre>`;
+    const normalized = normalizeCodeBlock(block.codeBody || content);
+    const languageClass = normalized.language
+      ? ` class="language-${escapeHtml(normalized.language)}"`
+      : "";
+    return `${renderCaptionList(block.captions, state)}<pre><code${languageClass}>${escapeHtml(normalized.code)}</code></pre>`;
   }
   if (block.type === "equation") {
     return `<div class="pt-equation-math">${state.renderer.math(content, true)}</div>`;
@@ -346,13 +356,31 @@ function applyReadingPreferences(state, reading) {
   );
 }
 
+function loadKatexStyles() {
+  if (katexStyles) return katexStyles;
+  // Zotero 没有公开的插件 API 用于把已注册 chrome package 中的样式表
+  // 读取为文本。官方 Reader 也通过 Zotero.File.getContentsFromURL()
+  // 读取内置 resource:// 文本，因此把这项稳定内部访问集中在此处并先做
+  // 能力检测；接口或资源不可用时安全中止面板创建，避免展示错位公式。
+  const css = ctx.Zotero?.File?.getContentsFromURL?.(KATEX_STYLESHEET_URL);
+  if (!css || !String(css).includes(".katex")) {
+    throw new Error("KaTeX 样式加载失败");
+  }
+  katexStyles = prepareKatexStyles(css);
+  ctx.Zotero?.debug?.(
+    `[PaperTranslate][katex-html-v1] loaded ${katexStyles.length} CSS characters`
+  );
+  return katexStyles;
+}
+
 function ensurePanelStyles(doc) {
   if (styledDocuments.has(doc)) return;
   // Reader 文档位于另一个 privileged compartment。读取 adoptedStyleSheets
   // 会尝试遍历 XrayWrapper，并触发 Symbol.iterator 拒绝警告；直接注入
-  // <style> 可避免跨 compartment 传递 CSSStyleSheet。
+  // <style> 可避免跨 compartment 传递 CSSStyleSheet。Zotero Reader 自身
+  // 的 _injectCSS() 也采用相同方式。
   const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
-  style.textContent = READER_PANEL_CSS;
+  style.textContent = `${loadKatexStyles()}\n${READER_PANEL_CSS}`;
   (doc.head || doc.documentElement).appendChild(style);
   styledDocuments.add(doc);
 }

@@ -80,7 +80,8 @@ Reader 面板保留 MinerU 的结构化内容块、页码和定位信息，并�
 - 普通文本支持 GFM、链接、引用、围栏代码、列表和 Markdown 表格；
 - 渲染结果使用绑定到当前 Reader window 的 DOMPurify 白名单净化，Markdown
   不允许加载任意远程图片，链接由 Zotero 在外部打开；
-- `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]` 公式由 KaTeX `renderToString()` 输出 MathML；
+- `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]` 公式由 KaTeX `renderToString()`
+  输出 HTML 视觉层与 MathML 无障碍层，源码 annotation 会在写入 DOM 前移除；
 - 本地图片读取后转换为 Base64 `data:` URL，避免 Reader 文档跨权限加载本地文件；
 - MinerU `table_body` 不经过 Markdown 解析，使用仅允许表格标签和
   `rowspan`/`colspan` 等属性的独立白名单；
@@ -132,7 +133,7 @@ chrome/content/
       readerPanel.mjs       Reader 面板、块渲染、翻译调度与 PDF 联动
   vendor/katex/
     katex.min.js            KaTeX 0.16.22，运行时使用 renderToString()
-    katex.min.css、fonts/   KaTeX 随包资源（当前 MathML 路径未加载）
+    katex.min.css、fonts/   KaTeX HTML 视觉层样式与本地字体
   vendor/marked/            Marked 18 UMD 与 MIT 许可证
   vendor/dompurify/         DOMPurify 3.4.12 与许可证
 locale/                     Fluent 文案（菜单/区块标题）
@@ -141,7 +142,7 @@ build.ps1                   打包 XPI
 
 ## 注意
 
-- `Zotero 数据目录/papertranslate/` 中的解析产物、图片与译文缓存体积可能较大；删除附件时不会自动清理，可在设置页“数据”区域手动清除。
+- `Zotero 数据目录/papertranslate/` 中的解析产物、图片与译文缓存体积可能较大；附件或父论文移入回收站时缓存会保留，恢复后仍可使用；从回收站彻底删除后，插件会自动清理相关缓存。也可在设置页“数据”区域手动清除。
 - MinerU 与配置的大模型都是外部服务，请确认 API Key、额度、数据处理政策与网络可用。
 - Marked 本身不负责安全；所有 Markdown 输出和 MinerU `table_body` 都必须先经过
   当前 Reader window 中的 DOMPurify 白名单，不能绕过 `panelRenderer.mjs` 直接写入。

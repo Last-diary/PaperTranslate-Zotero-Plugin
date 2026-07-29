@@ -69,12 +69,22 @@ export const TABLE_SANITIZE_OPTIONS = Object.freeze({
   KEEP_CONTENT: true
 });
 
-const MATH_SANITIZE_OPTIONS = Object.freeze({
-  USE_PROFILES: { html: true, mathMl: true },
+export const MATH_SANITIZE_OPTIONS = Object.freeze({
+  // KaTeX 的 HTML 视觉层需要行内布局样式，根号和可伸缩定界符还会使用
+  // 经过 DOMPurify SVG profile 净化的 SVG。trust:false 会阻止 LaTeX
+  // 输入注入任意 HTML、样式或 URL。
+  USE_PROFILES: { html: true, mathMl: true, svg: true },
   ALLOW_ARIA_ATTR: true,
   ALLOW_DATA_ATTR: false,
-  FORBID_ATTR: ["style"],
-  FORBID_TAGS: ["form", "iframe", "input", "object", "script", "style", "svg"]
+  FORBID_TAGS: [
+    "foreignObject",
+    "form",
+    "iframe",
+    "input",
+    "object",
+    "script",
+    "style"
+  ]
 });
 
 function stripMathWrappers(content) {
@@ -180,7 +190,10 @@ export function createPanelRenderer({
           throwOnError: false,
           strict: "ignore",
           trust: false,
-          output: "mathml",
+          // 使用 KaTeX HTML 负责稳定的视觉排版，MathML 仅用于无障碍。
+          // 纯 MathML 会把部分 \underset 结构放进 token 元素，Gecko
+          // 无法正确显示其下置内容。
+          output: "htmlAndMathml",
           errorColor: "#b42318"
         })
       );

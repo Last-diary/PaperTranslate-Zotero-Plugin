@@ -13,7 +13,20 @@ export function rootDir() {
 }
 
 export function itemDir(item) {
-  return PathUtils.join(rootDir(), item.key);
+  return itemDirForKey(item?.key);
+}
+
+export function itemDirForKey(value) {
+  const root = checkedRootDir();
+  const key = String(value || "").trim();
+  if (!key || key.length > 64 || key.includes("/") || key.includes("\\")) {
+    throw new Error("无法确定论文缓存目录。");
+  }
+  const dir = PathUtils.join(root, key);
+  if (PathUtils.parent(dir) !== root || PathUtils.filename(dir) !== key) {
+    throw new Error("论文缓存目录校验失败。");
+  }
+  return dir;
 }
 
 export function manifestPath(dir) {
@@ -79,16 +92,7 @@ function checkedRootDir() {
 }
 
 function checkedItemDir(item) {
-  const root = checkedRootDir();
-  const key = String(item?.key || "").trim();
-  if (!key || key.includes("/") || key.includes("\\")) {
-    throw new Error("无法确定当前论文的缓存目录。");
-  }
-  const dir = PathUtils.join(root, key);
-  if (PathUtils.parent(dir) !== root || PathUtils.filename(dir) !== key) {
-    throw new Error("当前论文的缓存目录校验失败，已取消清除。");
-  }
-  return dir;
+  return itemDirForKey(item?.key);
 }
 
 export async function clearItemTranslationCache(item) {

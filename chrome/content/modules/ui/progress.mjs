@@ -8,7 +8,9 @@ export async function runWithProgress(title, fn) {
   const pw = new Zotero.ProgressWindow({ closeOnClick: true });
   pw.changeHeadline(title);
   pw.show();
-  const line = new pw.ItemProgress("", "准备中…");
+  // Zotero 自身的短通知采用“简短标题 + 带类型图标的单行状态”。
+  // 不把论文标题等长文本塞进这一行，避免窄窗口出现不自然的多行换行。
+  const line = new pw.ItemProgress("attachmentPDF", "准备中…");
   const update = (text) => {
     try {
       line.setText(String(text));
@@ -33,6 +35,7 @@ export async function runWithProgress(title, fn) {
     const result = await fn(update);
     update(typeof result === "string" && result.trim() ? result : "完成");
     try {
+      line.setItemTypeAndIcon(null, "tick");
       line.setProgress(100);
     } catch {}
     closeLater(4500);

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import {
   MARKDOWN_SANITIZE_OPTIONS,
+  MATH_SANITIZE_OPTIONS,
   stripKatexSourceAnnotations,
   TABLE_SANITIZE_OPTIONS,
   safeBlockTypeClass
@@ -62,23 +63,26 @@ test("math segmentation ignores currency-like and escaped dollars", () => {
   ]);
 });
 
-test("KaTeX MathML source annotation is stripped before sanitization", () => {
+test("KaTeX visual HTML preserves complex layouts without source annotations", () => {
   const katex = loadKatex();
-  const tex = String.raw`\operatorname{Attention}(Q,K,V)=\operatorname{softmax}(\frac{QK^{T}}{\sqrt{d_k}})V\tag{1}`;
+  const tex = String.raw`\text{fix rate}=\underset{\text{problems}}{\mathbb{E}}\left[\frac{c}{n}\right]\tag{1}`;
   const markup = katex.renderToString(tex, {
     displayMode: true,
-    output: "mathml",
+    output: "htmlAndMathml",
     throwOnError: false
   });
 
   assert.match(markup, /<annotation encoding="application\/x-tex">/);
-  assert.match(markup, /\\operatorname\{Attention\}/);
+  assert.match(markup, /class="katex-html"/);
+  assert.match(markup, /class="mop op-limits"/);
+  assert.match(markup, /problems/);
 
   const stripped = stripKatexSourceAnnotations(markup);
   assert.match(stripped, /<math\b/);
+  assert.match(stripped, /class="katex-html"/);
   assert.match(stripped, /<mfrac>/);
   assert.doesNotMatch(stripped, /<annotation\b/);
-  assert.doesNotMatch(stripped, /\\operatorname\{Attention\}/);
+  assert.doesNotMatch(stripped, /\\underset/);
 });
 
 test("sanitizer allow-lists exclude active content and remote images", () => {
@@ -88,6 +92,10 @@ test("sanitizer allow-lists exclude active content and remote images", () => {
   assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_TAGS.includes("script"));
   assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_ATTR.includes("onclick"));
   assert.ok(MARKDOWN_SANITIZE_OPTIONS.FORBID_ATTR.includes("style"));
+  assert.equal(MATH_SANITIZE_OPTIONS.USE_PROFILES.mathMl, true);
+  assert.equal(MATH_SANITIZE_OPTIONS.USE_PROFILES.svg, true);
+  assert.ok(!MATH_SANITIZE_OPTIONS.FORBID_TAGS.includes("svg"));
+  assert.ok(!MATH_SANITIZE_OPTIONS.FORBID_ATTR?.includes("style"));
 
   assert.deepEqual(
     TABLE_SANITIZE_OPTIONS.ALLOWED_ATTR.slice().sort(),

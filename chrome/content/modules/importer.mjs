@@ -11,6 +11,12 @@ import { contentBlockText } from "./blocks.mjs";
 
 const SOURCE_PDF_NAME = "source.pdf";
 
+async function assertAttachmentStillExists(item, dir = null) {
+  if (item?.id && ctx.Zotero.Items.exists(item.id)) return;
+  if (dir) await storage.removeItemData(dir).catch(() => {});
+  throw new Error("PDF 附件已被删除，已取消保存解析结果。");
+}
+
 async function findMineruOutputRoot(dir, depth = 0) {
   if (depth > 5) return null;
   const children = await IOUtils.getChildren(dir).catch(() => []);
@@ -58,6 +64,7 @@ async function normalizeExtractedProject(projectDir) {
 }
 
 export async function importAttachment(item, { onProgress = () => {} } = {}) {
+  await assertAttachmentStillExists(item);
   const config = getConfig();
   if (!config.mineru.apiKey) {
     throw new Error("请先在 设置 → PaperTranslate 中填写 MinerU API Token。");
@@ -98,10 +105,12 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
 
   onProgress("解压并整理解析产物…");
   const dir = storage.itemDir(item);
-  await storage.removeItemData(dir);
-  await IOUtils.makeDirectory(dir, { createAncestors: true });
   try {
+    await assertAttachmentStillExists(item, dir);
+    await storage.removeItemData(dir);
+    await IOUtils.makeDirectory(dir, { createAncestors: true });
     await extractZip(zipPath, dir);
+    await assertAttachmentStillExists(item, dir);
   } finally {
     await IOUtils.remove(zipPath, { ignoreAbsent: true });
   }
@@ -139,8 +148,9 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
   }
 
   const manifest = {
-    version: 1,
+    version: 2,
     attachmentKey: item.key,
+    attachmentLibraryID: item.libraryID,
     // MinerU 偶尔会把首页版权或授权声明误标为 title。Zotero 条目标题
     // 由用户元数据确定，可靠性更高，因此优先写入解析清单。
     title: cleanTitle(
@@ -161,6 +171,8 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
     blockCount,
     pageCount
   };
+  await assertAttachmentStillExists(item, dir);
   await storage.writeJson(storage.manifestPath(dir), manifest);
+  await assertAttachmentStillExists(item, dir);
   return { dir, manifest };
 }

@@ -66,21 +66,21 @@ async function existingParsedAttachment(attachment) {
 }
 
 export async function parseAttachment(attachment, { force = false } = {}) {
-  return runWithProgress("PaperTranslate 解析 PDF", async (update) => {
+  return runWithProgress("PDF 解析", async (update) => {
     update("检查已有解析结果…");
     if (!force) {
       const existing = await existingParsedAttachment(attachment);
       if (existing) {
-        return `解析结果已存在：${attachmentDisplayTitle(attachment, existing.manifest)}，未重复解析。`;
+        return "解析结果已存在，已跳过重复解析。";
       }
     }
-    const { manifest } = await importAttachment(attachment, { onProgress: update });
-    return `解析完成：${attachmentDisplayTitle(attachment, manifest)}`;
+    await importAttachment(attachment, { onProgress: update });
+    return "解析完成。";
   });
 }
 
 export async function translateAttachment(attachment, { force = false } = {}) {
-  return runWithProgress("PaperTranslate 翻译全文", async (update) => {
+  return runWithProgress("全文翻译", async (update) => {
     const dir = storage.itemDir(attachment);
     const manifest = await storage.readManifest(attachment);
     if (!manifest) throw new Error("尚未解析，请先执行“解析 PDF”。");
@@ -99,7 +99,7 @@ export async function translateAttachment(attachment, { force = false } = {}) {
 }
 
 export async function parseAndTranslateAttachment(attachment, { force = false } = {}) {
-  return runWithProgress("PaperTranslate 解析并翻译全文", async (update) => {
+  return runWithProgress("解析并翻译", async (update) => {
     update("检查已有解析结果…");
     let project = await existingParsedAttachment(attachment);
     const reusedParsing = Boolean(project);
@@ -114,7 +114,7 @@ export async function parseAndTranslateAttachment(attachment, { force = false } 
       update("解析完成，准备翻译全文…");
     }
 
-    const { dir, manifest, blocks } = project;
+    const { dir, blocks } = project;
     if (!blocks.length) throw new Error("解析完成，但没有可翻译的内容块。");
 
     const service = new TranslationService();
@@ -126,10 +126,10 @@ export async function parseAndTranslateAttachment(attachment, { force = false } 
     });
     if (!result.translated) {
       return reusedParsing
-        ? `解析结果已存在：${attachmentDisplayTitle(attachment, manifest)}；没有需要新增翻译的内容。`
-        : `解析完成：${attachmentDisplayTitle(attachment, manifest)}；没有需要翻译的内容。`;
+        ? "解析结果已存在，没有需要新增翻译的内容。"
+        : "解析完成，没有需要翻译的内容。";
     }
-    return `解析并翻译完成：${attachmentDisplayTitle(attachment, manifest)}；本次翻译 ${result.translated} 段。`;
+    return `解析并翻译完成：本次翻译 ${result.translated} 段。`;
   });
 }
 
@@ -143,10 +143,9 @@ export async function clearAttachmentsTranslationCaches(attachments) {
       if (result.removed) removed++;
     }
     if (targets.length === 1) {
-      const title = attachmentDisplayTitle(targets[0]);
       return removed
-        ? `已删除翻译缓存：${title}`
-        : `没有可删除的翻译缓存：${title}`;
+        ? "已删除翻译缓存。"
+        : "没有可删除的翻译缓存。";
     }
     return removed
       ? `已删除 ${removed} 篇论文的翻译缓存；${targets.length - removed} 篇没有翻译缓存。`
@@ -164,10 +163,9 @@ export async function clearAttachmentsPaperTranslateData(attachments) {
       if (result.removed) removed++;
     }
     if (targets.length === 1) {
-      const title = attachmentDisplayTitle(targets[0]);
       return removed
-        ? `已删除解析和翻译缓存：${title}`
-        : `没有可删除的解析或翻译缓存：${title}`;
+        ? "已删除解析和翻译缓存。"
+        : "没有可删除的解析或翻译缓存。";
     }
     return removed
       ? `已删除 ${removed} 篇论文的解析和翻译缓存；${targets.length - removed} 篇没有相关缓存。`
