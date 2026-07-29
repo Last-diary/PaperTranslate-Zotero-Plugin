@@ -14,11 +14,17 @@ import { TocEnhancer } from "../toc.mjs";
 import { escapeHtml } from "../utils.mjs";
 import { importAttachment } from "../importer.mjs";
 import { READER_PANEL_CSS } from "../readerPanelStyles.mjs";
+import {
+  blockSourceText,
+  setBlockSourceText,
+  shouldEditSource
+} from "./blockEditing.mjs";
 import { normalizeCodeBlock } from "./codeBlock.mjs";
 import {
   KATEX_STYLESHEET_URL,
   prepareKatexStyles
 } from "./katexStyles.mjs";
+import { normalizeInlineMathSpacing } from "./markdownMath.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 
 const PANEL_ID = "papertranslate-panel";
@@ -160,27 +166,11 @@ async function prepareImageSources(state, blocks) {
 
 function blockContent(block, state) {
   if (state.mode === "translation" && state.eligibleIds.has(block.id)) {
-    if (state.translations[block.id]) return state.translations[block.id];
+    if (state.translations[block.id]) {
+      return normalizeInlineMathSpacing(state.translations[block.id]);
+    }
   }
-  return block.text;
-}
-
-function originalBlockText(block) {
-  if (["image", "chart", "table"].includes(block?.type)) {
-    return Array.isArray(block.captions) ? block.captions.filter(Boolean).join("\n").trim() : "";
-  }
-  return String(block?.text || "").trim();
-}
-
-function setOriginalBlockText(block, value) {
-  if (["image", "chart", "table"].includes(block?.type)) {
-    block.captions = String(value || "")
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  } else {
-    block.text = String(value || "").trim();
-  }
+  return normalizeInlineMathSpacing(block.text);
 }
 
 function sourceOverrideState(data) {
@@ -199,7 +189,7 @@ function sourceOverrideState(data) {
 function applySourceOverrides(blocks, overrides) {
   for (const block of blocks) {
     if (!Object.prototype.hasOwnProperty.call(overrides, block.id)) continue;
-    setOriginalBlockText(block, overrides[block.id]);
+    setBlockSourceText(block, overrides[block.id]);
   }
 }
 
@@ -239,9 +229,9 @@ function captionContent(block, state) {
   const captions = Array.isArray(block.captions) ? block.captions : [];
   if (state.mode === "translation" && ["image", "chart", "table"].includes(block.type)) {
     if (!state.eligibleIds.has(block.id)) return captions.join("\n");
-    return state.translations[block.id] || captions.join("\n");
+    return normalizeInlineMathSpacing(state.translations[block.id] || captions.join("\n"));
   }
-  return captions.join("\n");
+  return normalizeInlineMathSpacing(captions.join("\n"));
 }
 
 function captionList(block, state) {
@@ -1017,7 +1007,12 @@ function editBlockContent(state, block) {
   const section = blockSection(state, block.id);
   if (!section) return;
 
-  const editingOriginal = state.mode === "original";
+  // 译文页中的代码、公式等不可翻译块展示的仍是源内容，
+  // 因此编辑目标也必须是源内容，而不是一个不会被渲染的译文缓存项。
+  const editingOriginal = shouldEditSource(
+    state.mode,
+    state.eligibleIds.has(block.id)
+  );
   section.classList.add("pt-editing");
   section.textContent = "";
   const editor = el(state.doc, "div");
@@ -1032,7 +1027,7 @@ function editBlockContent(state, block) {
   editorInput.setAttribute("aria-multiline", "true");
   editorInput.spellcheck = false;
   const previousValue = editingOriginal
-    ? originalBlockText(block)
+    ? blockSourceText(block)
     : String(state.translations[block.id] || "");
   editorInput.textContent = previousValue;
   editorInput.setAttribute("aria-label", editingOriginal ? "编辑原文内容" : "编辑译文内容");
@@ -1092,7 +1087,7 @@ function editBlockContent(state, block) {
         state.sourceOverrides = nextOverrides;
         state.pendingSourceTranslationIds = nextPendingIds;
         state.translations = nextTranslations;
-        setOriginalBlockText(block, value);
+        setBlockSourceText(block, value);
         state.eligibleIds = eligibleTranslationIds(state.blocks, getConfig().translation);
         renderToc(state);
         refreshBlockSection(state, block);
@@ -2115,7 +2110,7 @@ function attachPanelEvents(state) {
     if (!block) return;
 
     if (action === "copy-original") {
-      copyBlockText(state, originalBlockText(block), "原文").catch((error) => {
+      copyBlockText(state, blockSourceText(block), "原文").catch((error) => {
         setFooter(state, `复制原文失败：${error.message || error}`);
       });
     } else if (action === "copy-translation") {

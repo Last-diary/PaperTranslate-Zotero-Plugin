@@ -5,6 +5,7 @@ import { getConfig } from "./config.mjs";
 import { chatCompletionText } from "./llm/openaiCompatible.mjs";
 import { createLlmProvider } from "./llm/provider.mjs";
 import { readJson, writeJson, translationsPath } from "./storage.mjs";
+import { normalizeInlineMathSpacing } from "./ui/markdownMath.mjs";
 
 export function extractJson(text) {
   const trimmed = text.trim();
@@ -224,7 +225,7 @@ export class TranslationService {
       const items = await this.translateChunk(chunk);
       for (const item of items) {
         if (item && typeof item.id === "string" && typeof item.text === "string") {
-          cache[item.id] = item.text.trim();
+          cache[item.id] = normalizeInlineMathSpacing(item.text.trim());
           translated += 1;
         }
       }

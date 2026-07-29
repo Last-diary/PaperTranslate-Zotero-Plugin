@@ -74,6 +74,93 @@ function findMathStart(source) {
   return -1;
 }
 
+function isHorizontalWhitespace(value) {
+  return value === " " || value === "\t";
+}
+
+function isTextBoundary(value) {
+  return Boolean(value) && /[\p{L}\p{N}]/u.test(value);
+}
+
+function fencedCodeRangeAt(source, start) {
+  const marker = source[start];
+  if (!["`", "~"].includes(marker)) return null;
+  if (start > 0 && source[start - 1] !== "\n") return null;
+  let delimiterLength = 1;
+  while (source[start + delimiterLength] === marker) delimiterLength += 1;
+  if (delimiterLength < 3) return null;
+  const closingPattern = new RegExp(
+    `(?:^|\\n)[ \\t]{0,3}${marker === "`" ? "\\`" : "~"}{${delimiterLength},}[ \\t]*(?:\\r?\\n|$)`,
+    "g"
+  );
+  closingPattern.lastIndex = start + delimiterLength;
+  const match = closingPattern.exec(source);
+  return match ? { end: match.index + match[0].length } : { end: source.length };
+}
+
+function codeRangeAt(source, start) {
+  const fence = fencedCodeRangeAt(source, start);
+  if (fence) return fence;
+  if (source[start] !== "`" || isEscaped(source, start)) return null;
+  let delimiterLength = 1;
+  while (source[start + delimiterLength] === "`") delimiterLength += 1;
+  const delimiter = "`".repeat(delimiterLength);
+  const close = source.indexOf(delimiter, start + delimiterLength);
+  return close < 0 ? null : { end: close + delimiterLength };
+}
+
+// 在已经识别出的行内公式与相邻文字之间保留一个 ASCII 空格。
+// 展示公式、公式内部、转义美元符号以及 Markdown 代码片段保持原样。
+export function normalizeInlineMathSpacing(sourceValue) {
+  const source = String(sourceValue || "");
+  let output = "";
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const codeRange = codeRangeAt(source, cursor);
+    if (codeRange) {
+      output += source.slice(cursor, codeRange.end);
+      cursor = codeRange.end;
+      continue;
+    }
+
+    const range = mathRangeAt(source, cursor);
+    if (!range) {
+      output += source[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    const raw = source.slice(range.start, range.end);
+    if (range.display) {
+      output += raw;
+      cursor = range.end;
+      continue;
+    }
+
+    let whitespaceStart = output.length;
+    while (whitespaceStart > 0 && isHorizontalWhitespace(output[whitespaceStart - 1])) {
+      whitespaceStart -= 1;
+    }
+    if (isTextBoundary(output[whitespaceStart - 1])) {
+      output = `${output.slice(0, whitespaceStart)} `;
+    }
+
+    output += raw;
+
+    let next = range.end;
+    while (next < source.length && isHorizontalWhitespace(source[next])) next += 1;
+    if (isTextBoundary(source[next])) {
+      output += " ";
+      cursor = next;
+    } else {
+      cursor = range.end;
+    }
+  }
+
+  return output;
+}
+
 export function splitMathSegments(sourceValue) {
   const source = String(sourceValue || "");
   const segments = [];

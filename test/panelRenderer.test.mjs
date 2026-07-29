@@ -11,6 +11,7 @@ import {
 } from "../chrome/content/modules/ui/panelRenderer.mjs";
 import {
   markdownMathExtension,
+  normalizeInlineMathSpacing,
   splitMathSegments
 } from "../chrome/content/modules/ui/markdownMath.mjs";
 
@@ -61,6 +62,43 @@ test("math segmentation ignores currency-like and escaped dollars", () => {
     { type: "text", text: String.raw`\$5 and ` },
     { type: "inline", tex: "x_1" }
   ]);
+});
+
+test("inline math spacing is normalized only next to text", () => {
+  assert.equal(
+    normalizeInlineMathSpacing("结果为$x$时，令  $y$  equal z。"),
+    "结果为 $x$ 时，令 $y$ equal z。"
+  );
+  assert.equal(
+    normalizeInlineMathSpacing("取值为 $x$，且($y$)有效。"),
+    "取值为 $x$，且($y$)有效。"
+  );
+  assert.equal(
+    normalizeInlineMathSpacing("alpha\t$x$\tbeta"),
+    "alpha $x$ beta"
+  );
+});
+
+test("inline math spacing preserves display math, code, currency, and escapes", () => {
+  const source = [
+    "cost $5 and $10",
+    "代码 `value$x$code` 不变。",
+    "~~~txt",
+    "value$x$code",
+    "~~~",
+    "$$x+y$$",
+    String.raw`\$x$`
+  ].join("\n");
+  const expected = [
+    "cost $5 and $10",
+    "代码 `value$x$code` 不变。",
+    "~~~txt",
+    "value$x$code",
+    "~~~",
+    "$$x+y$$",
+    String.raw`\$x$`
+  ].join("\n");
+  assert.equal(normalizeInlineMathSpacing(source), expected);
 });
 
 test("KaTeX visual HTML preserves complex layouts without source annotations", () => {

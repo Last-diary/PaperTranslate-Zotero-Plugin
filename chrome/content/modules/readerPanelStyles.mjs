@@ -155,9 +155,11 @@ body.papertranslate-panel-open #reader-ui .split-view {
 .pt-block.pt-editing { cursor:default; }
 .pt-block-editor { display:flex; flex-direction:column; gap:8px; }
 .pt-block-editor-input {
-  width:100%; min-height:150px; resize:vertical; padding:9px 10px;
+  width:100%; min-height:78px; height:auto; max-height:min(45vh,420px);
+  resize:none; padding:9px 10px;
   border:1px solid #93c5fd; border-radius:7px; outline:none;
-  box-sizing:border-box; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
+  box-sizing:border-box; overflow-x:hidden; overflow-y:auto;
+  white-space:pre-wrap; overflow-wrap:anywhere;
   background:#fff; color:var(--pt-ink); font:inherit; line-height:1.65; cursor:text;
 }
 .pt-block-editor-input:focus { box-shadow:0 0 0 2px rgba(37,99,235,.14); }
