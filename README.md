@@ -11,6 +11,20 @@
 
 兼容 **Zotero 7 / 8 / 9**。
 
+## 当前版本：0.4.8
+
+- Reader 内容渲染迁移到 **Marked 18 + DOMPurify 3.4.12**，支持 GFM、围栏代码、
+  Markdown 表格和经过白名单净化的链接、表格与公式输出。
+- KaTeX 同时输出 HTML 视觉层与 MathML 无障碍层；修复复杂公式重复显示、行内公式
+  与相邻文字间距，以及 KaTeX 本地字体加载。
+- 代码块会识别并移除完整的反引号或波浪线围栏，保留语言标记；不完整围栏和代码正文
+  中的反引号不会被误删。
+- Reader 中所有已显示内容块都可编辑：译文模式下未翻译的公式、代码等块会编辑原文；
+  编辑框随内容增长，并限制最大高度。
+- Zotero 条目移入回收站时保留 PaperTranslate 缓存；彻底删除后自动清理对应解析、
+  翻译和原文编辑数据，启动时也会保守清理孤立缓存。
+- 条目右键菜单的解析、翻译和两项缓存删除命令均使用统一的 16×16 主题图标。
+
 ## 功能对照
 
 | 原 Node 项目 | 本插件 |
@@ -68,7 +82,8 @@ Zotero → 设置 → PaperTranslate：
    - 「原文 / 译文」切换；译文模式会自动翻译当前屏幕附近尚未缓存的内容块；
    - 「翻译全文」对全文做增量翻译；
    - 点击内容块可定位并高亮 PDF；在 PDF 中右键可反向定位右侧内容；
-   - 内容块右键可复制、重新翻译、编辑内容或定位 PDF；
+   - 内容块右键可复制、重新翻译、编辑内容或定位 PDF；没有译文的公式、代码等块会
+     直接编辑原文，编辑框随内容动态增长并限制最大高度；
    - 打开面板和完成宽度拖拽后，插件会请求 Zotero Reader 重新执行 PDF 自动调整大小。
 
 ## 内容渲染
@@ -122,8 +137,12 @@ chrome/content/
     importer.mjs            解析导入管线（移植）
     zip.mjs                 nsIZipReader 解压（替代 yauzl）
     utils.mjs               工具函数
+    cacheCleanup.mjs        永久删除条目后的缓存清理与启动扫描
     readerPanelStyles.mjs   Reader 面板注入样式
     ui/
+      blockEditing.mjs      原文/译文块编辑字段适配
+      codeBlock.mjs         围栏代码规范化与语言标记提取
+      katexStyles.mjs       KaTeX 样式和字体 URL 处理
       markdownMath.mjs      Marked 数学 token 与公式分段
       panelRenderer.mjs     Marked、DOMPurify、KaTeX 与表格净化
       actions.mjs           解析、解析后翻译等共享动作
@@ -136,9 +155,22 @@ chrome/content/
     katex.min.css、fonts/   KaTeX HTML 视觉层样式与本地字体
   vendor/marked/            Marked 18 UMD 与 MIT 许可证
   vendor/dompurify/         DOMPurify 3.4.12 与许可证
+icons/                      插件、侧栏和条目右键菜单图标
 locale/                     Fluent 文案（菜单/区块标题）
+test/                       渲染、公式、代码、编辑和缓存清理回归测试
 build.ps1                   打包 XPI
 ```
+
+## 开发检查
+
+```powershell
+$tests = Get-ChildItem .\test\*.test.mjs | ForEach-Object FullName
+node --test $tests
+.\build.ps1
+```
+
+测试覆盖 Markdown/公式渲染、代码围栏、内容块编辑、KaTeX 字体路径和缓存清理决策。
+成功打包后，仓库根目录会生成 `papertranslate.xpi`。
 
 ## 注意
 
