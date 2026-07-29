@@ -73,15 +73,21 @@ Zotero → 设置 → PaperTranslate：
 
 ## 内容渲染
 
-Reader 面板直接渲染 MinerU 的结构化内容块，不使用通用 Markdown 解析器：
+Reader 面板保留 MinerU 的结构化内容块、页码和定位信息，并在块内使用
+**Marked 18 + DOMPurify 3.4.12** 渲染和净化 Markdown：
 
-- 标题、正文、列表、代码、公式、图片、图表和表格按块类型分别生成 HTML；
-- 普通文本支持粗体、行内代码、上标、下标、换行和少量安全内联标签；
+- 标题、正文、列表、代码、公式、图片、图表和表格仍按块类型分别处理；
+- 普通文本支持 GFM、链接、引用、围栏代码、列表和 Markdown 表格；
+- 渲染结果使用绑定到当前 Reader window 的 DOMPurify 白名单净化，Markdown
+  不允许加载任意远程图片，链接由 Zotero 在外部打开；
 - `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]` 公式由 KaTeX `renderToString()` 输出 MathML；
 - 本地图片读取后转换为 Base64 `data:` URL，避免 Reader 文档跨权限加载本地文件；
+- MinerU `table_body` 不经过 Markdown 解析，使用仅允许表格标签和
+  `rowspan`/`colspan` 等属性的独立白名单；
 - 样式由 `readerPanelStyles.mjs` 作为 `<style>` 直接注入 Reader document。
 
-这里的“重排内容”以 MinerU 块结构为准，不等同于完整 Markdown 渲染；Markdown 链接、引用、围栏代码块和嵌套列表等通用语法不保证支持。
+这里的“重排内容”仍以 MinerU 块结构为准，不会直接渲染 `full.md`，因此块级
+翻译缓存、PDF 页码/bbox 定位、内容编辑和增量更新保持可用。
 
 ## 路线图
 
@@ -117,6 +123,8 @@ chrome/content/
     utils.mjs               工具函数
     readerPanelStyles.mjs   Reader 面板注入样式
     ui/
+      markdownMath.mjs      Marked 数学 token 与公式分段
+      panelRenderer.mjs     Marked、DOMPurify、KaTeX 与表格净化
       actions.mjs           解析、解析后翻译等共享动作
       menu.mjs              条目右键菜单
       itemPane.mjs          条目信息面板
@@ -125,6 +133,8 @@ chrome/content/
   vendor/katex/
     katex.min.js            KaTeX 0.16.22，运行时使用 renderToString()
     katex.min.css、fonts/   KaTeX 随包资源（当前 MathML 路径未加载）
+  vendor/marked/            Marked 18 UMD 与 MIT 许可证
+  vendor/dompurify/         DOMPurify 3.4.12 与许可证
 locale/                     Fluent 文案（菜单/区块标题）
 build.ps1                   打包 XPI
 ```
@@ -133,5 +143,6 @@ build.ps1                   打包 XPI
 
 - `Zotero 数据目录/papertranslate/` 中的解析产物、图片与译文缓存体积可能较大；删除附件时不会自动清理，可在设置页“数据”区域手动清除。
 - MinerU 与配置的大模型都是外部服务，请确认 API Key、额度、数据处理政策与网络可用。
-- 普通正文会先转义再格式化；为保留表格结构，MinerU 返回的 `table_body` HTML 当前会直接进入 Reader 面板，请只使用可信解析来源和解析产物。
+- Marked 本身不负责安全；所有 Markdown 输出和 MinerU `table_body` 都必须先经过
+  当前 Reader window 中的 DOMPurify 白名单，不能绕过 `panelRenderer.mjs` 直接写入。
 - Reader 译文面板使用 Zotero Reader 官方工具栏/右键菜单事件，并在 Reader document 中注入面板 DOM。PDF 就绪检测、自动缩放和块定位还包含经过能力检测的 Zotero Reader/PDF.js 内部兼容访问，因此 Zotero 大版本升级后仍需运行验证。

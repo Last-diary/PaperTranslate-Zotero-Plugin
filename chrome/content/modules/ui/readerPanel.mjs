@@ -14,6 +14,7 @@ import { TocEnhancer } from "../toc.mjs";
 import { escapeHtml } from "../utils.mjs";
 import { importAttachment } from "../importer.mjs";
 import { READER_PANEL_CSS } from "../readerPanelStyles.mjs";
+import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 
 const PANEL_ID = "papertranslate-panel";
 const RESIZER_ID = "papertranslate-resizer";
@@ -98,132 +99,6 @@ function filterDisplayBlock(block, { content = "", extraText = content, tableBod
     next.extraText = shouldHideExtra ? "" : rawExtraText;
   }
   return next;
-}
-
-// ---------- LaTeX 公式（复用 PaperTranslate-Zotero 的 KaTeX 方案） ----------
-
-function stripMathWrappers(content) {
-  const trimmed = String(content || "").trim();
-  const patterns = [
-    /^\$\$([\s\S]*?)\$\$$/,
-    /^\\\[([\s\S]*?)\\\]$/,
-    /^\\\(([\s\S]*?)\\\)$/,
-    /^\$([\s\S]*?)\$$/
-  ];
-  for (const pattern of patterns) {
-    const match = trimmed.match(pattern);
-    if (match) return match[1].trim();
-  }
-  return trimmed;
-}
-
-function normalizeSafeInlineTag(rawTag) {
-  const match = String(rawTag).match(
-    /^<\s*(\/?)\s*(sub|sup|b|i|em|strong|u|br|mark|small)\b([^>]*)>$/i
-  );
-  if (!match) return null;
-  const isClose = match[1] === "/";
-  const name = match[2].toLowerCase();
-  if (name === "br") return "<br>";
-  if (isClose) return `</${name}>`;
-  return `<${name}>`;
-}
-
-function protectSafeInlineHtml(text) {
-  const tokens = [];
-  const stash = (html) => {
-    const token = `\uE000${tokens.length}\uE001`;
-    tokens.push(html);
-    return token;
-  };
-  let output = decodeCommonHtmlEntities(text);
-  output = output.replace(
-    /&(?:amp|lt|gt|nbsp|times|minus|plusmn|deg|middot|le|ge|ne|infin|#\d+|#x[0-9a-fA-F]+);/gi,
-    (entity) => stash(entity)
-  );
-  output = output.replace(
-    /<\/?\s*(?:sub|sup|b|i|em|strong|u|br|mark|small)\b[^>]*>/gi,
-    (tag) => {
-      const normalized = normalizeSafeInlineTag(tag);
-      return normalized ? stash(normalized) : tag;
-    }
-  );
-  return { text: output, tokens };
-}
-
-function formatPlainMarkdown(text) {
-  const protectedContent = protectSafeInlineHtml(text);
-  let html = escapeHtml(protectedContent.text);
-  html = html.replace(/\uE000(\d+)\uE001/g, (match, index) => (
-    protectedContent.tokens[Number(index)] ?? ""
-  ));
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/~([^~\n]+?)~/g, "<sub>$1</sub>");
-  html = html.replace(/\^([^^\n]+?)\^/g, "<sup>$1</sup>");
-  return html.replace(/\r?\n/g, "<br>");
-}
-
-function renderMathHtml(tex, displayMode = false) {
-  const cleaned = stripMathWrappers(tex);
-  if (!cleaned) return "";
-  try {
-    if (!ctx.katex?.renderToString) throw new Error("KaTeX 未加载");
-    return ctx.katex.renderToString(cleaned, {
-      displayMode: Boolean(displayMode),
-      throwOnError: false,
-      strict: "ignore",
-      trust: false,
-      // Firefox/Zotero 原生支持 MathML。使用 MathML 可避免 KaTeX HTML
-      // 依赖外部字体和样式表，在 Reader 文档里更可靠。
-      output: "mathml",
-      errorColor: "#b42318"
-    });
-  } catch {
-    return `<code class="pt-math-fallback">${escapeHtml(cleaned)}</code>`;
-  }
-}
-
-function splitMathSegments(text) {
-  const source = String(text || "");
-  const segments = [];
-  const pattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$((?:\\.|[^$\\])+)\$/g;
-  let last = 0;
-  let match;
-  while ((match = pattern.exec(source)) !== null) {
-    if (match.index > last) segments.push({ type: "text", text: source.slice(last, match.index) });
-    if (match[1] != null) segments.push({ type: "display", tex: match[1] });
-    else if (match[2] != null) segments.push({ type: "display", tex: match[2] });
-    else if (match[3] != null) segments.push({ type: "inline", tex: match[3] });
-    else if (match[4] != null) segments.push({ type: "inline", tex: match[4] });
-    last = match.index + match[0].length;
-  }
-  if (last < source.length) segments.push({ type: "text", text: source.slice(last) });
-  if (!segments.length) segments.push({ type: "text", text: source });
-  return segments;
-}
-
-function wrapInlineMath(text) {
-  return splitMathSegments(text).map((segment) => {
-    if (segment.type === "display") {
-      return `<span class="pt-math-display">${renderMathHtml(segment.tex, true)}</span>`;
-    }
-    if (segment.type === "inline") {
-      return `<span class="pt-math-inline">${renderMathHtml(segment.tex, false)}</span>`;
-    }
-    return formatPlainMarkdown(segment.text);
-  }).join("");
-}
-
-function renderMathInHtmlFragment(html) {
-  return String(html || "").split(/(<[^>]+>)/g).map((part) => {
-    if (!part || part.startsWith("<")) return part;
-    return splitMathSegments(part).map((segment) => {
-      if (segment.type === "display") return renderMathHtml(segment.tex, true);
-      if (segment.type === "inline") return renderMathHtml(segment.tex, false);
-      return segment.text;
-    }).join("");
-  }).join("");
 }
 
 // ---------- 渲染辅助 ----------
@@ -368,9 +243,9 @@ function captionList(block, state) {
   return content ? content.split("\n").map((item) => item.trim()).filter(Boolean) : [];
 }
 
-function renderCaptionList(captions) {
+function renderCaptionList(captions, state) {
   if (!Array.isArray(captions) || !captions.length) return "";
-  return `<figcaption>${captions.map(wrapInlineMath).join("<br>")}</figcaption>`;
+  return `<figcaption>${captions.map((caption) => state.renderer.inline(caption)).join("<br>")}</figcaption>`;
 }
 
 function imageHtml(block, state) {
@@ -392,48 +267,47 @@ function blockBodyHtml(block, state) {
 
   if (block.type === "text" && block.level) {
     const level = Math.min(Math.max(Number(block.level || 2), 1), 3);
-    return `<h${level} class="pt-heading pt-heading-${level}">${wrapInlineMath(content)}</h${level}>`;
+    return `<h${level} class="pt-heading pt-heading-${level}">${state.renderer.inline(content)}</h${level}>`;
   }
   if (block.type === "title") {
-    return `<h1 class="pt-heading pt-title">${wrapInlineMath(content)}</h1>`;
+    return `<h1 class="pt-heading pt-title">${state.renderer.inline(content)}</h1>`;
   }
   if (block.type === "code") {
-    return `${renderCaptionList(block.captions)}<pre><code>${escapeHtml(block.codeBody || content)}</code></pre>`;
+    return `${renderCaptionList(block.captions, state)}<pre><code>${escapeHtml(block.codeBody || content)}</code></pre>`;
   }
   if (block.type === "equation") {
-    const tex = stripMathWrappers(content);
-    return `<div class="pt-equation-math">${renderMathHtml(tex, true)}</div>`;
+    return `<div class="pt-equation-math">${state.renderer.math(content, true)}</div>`;
   }
   if (block.type === "table") {
     const extractedTable = display.showTableBody
-      ? `<div class="pt-table-content">${display.tableBody ? renderMathInHtmlFragment(display.tableBody) : wrapInlineMath(content)}</div>`
+      ? `<div class="pt-table-content">${display.tableBody ? state.renderer.table(display.tableBody) : state.renderer.block(content)}</div>`
       : "";
-    return `<figure>${imageHtml(block, state)}${renderCaptionList(captionList(block, state))}${extractedTable}</figure>`;
+    return `<figure>${imageHtml(block, state)}${renderCaptionList(captionList(block, state), state)}${extractedTable}</figure>`;
   }
   if (block.type === "image" || block.type === "chart") {
-    const extra = display.extraText ? wrapInlineMath(display.extraText) : "";
-    return `<figure>${imageHtml(block, state)}${renderCaptionList(captionList(block, state))}${extra}</figure>`;
+    const extra = display.extraText ? state.renderer.block(display.extraText) : "";
+    return `<figure>${imageHtml(block, state)}${renderCaptionList(captionList(block, state), state)}${extra}</figure>`;
   }
   if (block.type === "list") {
     const items = content
       .split("\n")
       .map((item) => item.trim().replace(/^•\s*/, ""))
       .filter(Boolean)
-      .map((item) => `<li>${wrapInlineMath(item)}</li>`)
+      .map((item) => `<li>${state.renderer.inline(item)}</li>`)
       .join("");
     return `<ul>${items}</ul>`;
   }
   if (content.includes("|") && /^ *\|.*\|/m.test(content)) {
-    return wrapInlineMath(content);
+    return state.renderer.block(content);
   }
-  return `<p>${wrapInlineMath(content)}</p>`;
+  return state.renderer.block(content);
 }
 
 function blockSectionHtml(block, state) {
   const body = blockBodyHtml(block, state);
   if (!body) return "";
   const translated = state.mode === "translation" && Boolean(state.translations[block.id]);
-  const typeClass = `pt-block-${block.type || "text"}`;
+  const typeClass = `pt-block-${safeBlockTypeClass(block.type)}`;
   const selectedClass = state.selectedBlockId === block.id ? " pt-selected" : "";
   const translating = state.mode === "translation" && state.translatingIds.has(block.id);
   const translatingClass = translating ? " pt-translating" : "";
@@ -2232,6 +2106,16 @@ function attachPanelEvents(state) {
   // 点击块定位并短暂高亮 PDF 原文；用户在面板内选择文本时不触发
   els.body.addEventListener("click", (event) => {
     if (event.target.closest(".pt-block-editor")) return;
+    const link = event.target.closest("a.pt-external-link[href]");
+    if (link) {
+      event.preventDefault();
+      event.stopPropagation();
+      const href = String(link.getAttribute("href") || "").trim();
+      if (/^(?:https?|mailto):/i.test(href)) {
+        ctx.Zotero.launchURL(href);
+      }
+      return;
+    }
     if (state.win.getSelection()?.toString()) return;
     const section = event.target.closest("section[data-id][data-page]");
     if (!section) {
@@ -2389,12 +2273,19 @@ async function togglePanel(reader) {
     return;
   }
 
+  const renderer = createPanelRenderer({
+    markedNamespace: ctx.marked,
+    createDOMPurify: ctx.createDOMPurify,
+    win,
+    katex: ctx.katex
+  });
   const els = buildPanelShell(doc);
   const state = {
     reader,
     win,
     doc,
     els,
+    renderer,
     mode: "translation",
     blocks: [],
     blockById: new Map(),

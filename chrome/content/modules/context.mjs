@@ -6,6 +6,10 @@ export const ctx = {
   version: "",
   rootURI: "",
   shuttingDown: false,
-  // vendor/katex/katex.min.js 加载后的句柄
-  katex: null
+  // 本地打包的渲染依赖。DOMPurify 保留工厂函数，并在每个 Reader
+  // window 中分别创建实例，避免跨 privileged compartment 传递 DOM。
+  katex: null,
+  marked: null,
+  createDOMPurify: null,
+  vendorSandboxes: []
 };
