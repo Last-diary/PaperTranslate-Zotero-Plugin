@@ -8,7 +8,7 @@ import {
   unregisterMenus
 } from "./ui/menu.mjs";
 import { registerItemPane } from "./ui/itemPane.mjs";
-import { registerReader } from "./ui/readerPanel.mjs";
+import { registerReader, shutdownReaderPanels } from "./ui/readerPanel.mjs";
 import {
   registerCacheCleanupObserver,
   unregisterCacheCleanupObserver
@@ -48,17 +48,10 @@ export const PaperTranslate = {
     ctx.rootURI = rootURI;
     ctx.shuttingDown = false;
 
-    // 渲染依赖全部随 XPI 本地打包。脚本先加载到独立对象；
+    // 同步渲染依赖全部随 XPI 本地打包。脚本先加载到独立对象；
     // DOMPurify 只保留工厂函数，Reader 面板会用自己的 window 创建实例。
+    // MathJax 需要绑定具体 document，因此由各 Reader 面板单独加载。
     try {
-      const katexVendor = {};
-      Services.scriptloader.loadSubScript(
-        rootURI + "chrome/content/vendor/katex/katex.min.js",
-        katexVendor
-      );
-      ctx.katex = katexVendor.katex || null;
-      if (!ctx.katex?.renderToString) throw new Error("KaTeX 加载失败");
-
       const markedVendor = loadSandboxedUMD(
         rootURI + "chrome/content/vendor/marked/marked.umd.js",
         "marked",
@@ -129,6 +122,12 @@ export const PaperTranslate = {
       ctx.Zotero?.logError(error);
     }
 
+    try {
+      shutdownReaderPanels();
+    } catch (error) {
+      ctx.Zotero?.logError(error);
+    }
+
     // ItemPaneManager / Reader 事件监听按 pluginID 自动移除
     try {
       if (this._prefPaneID && ctx.Zotero?.PreferencePanes?.unregister) {
@@ -138,7 +137,6 @@ export const PaperTranslate = {
       ctx.Zotero?.logError(error);
     }
     this._prefPaneID = null;
-    ctx.katex = null;
     ctx.marked = null;
     ctx.createDOMPurify = null;
     for (const sandbox of ctx.vendorSandboxes.splice(0)) {

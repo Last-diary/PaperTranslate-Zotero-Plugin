@@ -190,7 +190,8 @@ export function splitMathSegments(sourceValue) {
 }
 
 // 先让 Marked 把公式视为不可拆分的 token，并返回转义后的原始定界符。
-// DOMPurify 完成净化后，panelRenderer 再在文本节点中调用 KaTeX。
+// DOMPurify 完成净化后，panelRenderer 再把已识别公式保存到受控占位节点，
+// 最后由 Reader document 中的 MathJax 直接转换为 SVG。
 export const markdownMathExtension = {
   name: "paperTranslateMath",
   level: "inline",

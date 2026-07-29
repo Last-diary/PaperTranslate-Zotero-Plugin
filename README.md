@@ -6,7 +6,7 @@
 - 通过 **OpenAI Chat Completions 兼容层**调用大模型；可直接配置兼容端点，并提供 DeepSeek 专属适配器，译文增量缓存在本地。
 - 通过 Zotero Reader 官方事件在工具栏注入「译」按钮，并在 Reader 文档中增加右侧同级面板；面板通过 CSS 缩窄原生 PDF 区域，不移动或重建 PDF iframe。
 - 支持原文/译文切换、当前屏幕自动翻译、全文翻译、块级双向定位、原文/译文编辑、会话内宽度记忆和 PDF 自动调整大小。
-- LaTeX 公式使用内置 **KaTeX** 离线渲染为 **MathML**，支持行内公式和独立公式块。
+- LaTeX 公式使用内置 **MathJax 3.2.2** 离线动态排版，支持行内公式和独立公式块。
 - 论文管理完全交给 Zotero（收藏、搜索、排序、同步），不再需要独立服务与浏览器扩展。
 
 兼容 **Zotero 7 / 8 / 9**。
@@ -15,8 +15,8 @@
 
 - Reader 内容渲染迁移到 **Marked 18 + DOMPurify 3.4.12**，支持 GFM、围栏代码、
   Markdown 表格和经过白名单净化的链接、表格与公式输出。
-- KaTeX 同时输出 HTML 视觉层与 MathML 无障碍层；修复复杂公式重复显示、行内公式
-  与相邻文字间距，以及 KaTeX 本地字体加载。
+- MathJax 以每个 Reader 独立实例异步排版变更内容；公式更新串行执行，并通过
+  `tex2svgPromise()` 直接替换受控占位节点，避免全页扫描与重复排版。
 - 代码块会识别并移除完整的反引号或波浪线围栏，保留语言标记；不完整围栏和代码正文
   中的反引号不会被误删。
 - Reader 中所有已显示内容块都可编辑：译文模式下未翻译的公式、代码等块会编辑原文；
@@ -95,8 +95,10 @@ Reader 面板保留 MinerU 的结构化内容块、页码和定位信息，并�
 - 普通文本支持 GFM、链接、引用、围栏代码、列表和 Markdown 表格；
 - 渲染结果使用绑定到当前 Reader window 的 DOMPurify 白名单净化，Markdown
   不允许加载任意远程图片，链接由 Zotero 在外部打开；
-- `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]` 公式由 KaTeX `renderToString()`
-  输出 HTML 视觉层与 MathML 无障碍层，源码 annotation 会在写入 DOM 前移除；
+- `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]` 会先由公式分段器识别为受控占位节点，
+  再由当前 Reader document 中的 MathJax 3.2.2 直接转换为 SVG；
+- MathJax 关闭页面级自动扫描和菜单，只处理插件变更的内容根节点，并启用 `ui/safe`
+  禁止公式输入生成 URL、CSS 类、ID 或内联样式；
 - 本地图片读取后转换为 Base64 `data:` URL，避免 Reader 文档跨权限加载本地文件；
 - MinerU `table_body` 不经过 Markdown 解析，使用仅允许表格标签和
   `rowspan`/`colspan` 等属性的独立白名单；
@@ -142,17 +144,17 @@ chrome/content/
     ui/
       blockEditing.mjs      原文/译文块编辑字段适配
       codeBlock.mjs         围栏代码规范化与语言标记提取
-      katexStyles.mjs       KaTeX 样式和字体 URL 处理
+      mathJax.mjs           每个 Reader 的 MathJax 加载、排版队列与清理
       markdownMath.mjs      Marked 数学 token 与公式分段
-      panelRenderer.mjs     Marked、DOMPurify、KaTeX 与表格净化
+      panelRenderer.mjs     Marked、DOMPurify、公式保留与表格净化
       actions.mjs           解析、解析后翻译等共享动作
       menu.mjs              条目右键菜单
       itemPane.mjs          条目信息面板
       progress.mjs          进度与通知
       readerPanel.mjs       Reader 面板、块渲染、翻译调度与 PDF 联动
-  vendor/katex/
-    katex.min.js            KaTeX 0.16.22，运行时使用 renderToString()
-    katex.min.css、fonts/   KaTeX HTML 视觉层样式与本地字体
+  vendor/mathjax/
+    es5/tex-svg-full.js     MathJax 3.2.2 TeX + SVG 离线组件
+    es5/ui/safe.js          不可信公式属性过滤
   vendor/marked/            Marked 18 UMD 与 MIT 许可证
   vendor/dompurify/         DOMPurify 3.4.12 与许可证
 icons/                      插件、侧栏和条目右键菜单图标
@@ -169,7 +171,7 @@ node --test $tests
 .\build.ps1
 ```
 
-测试覆盖 Markdown/公式渲染、代码围栏、内容块编辑、KaTeX 字体路径和缓存清理决策。
+测试覆盖 Markdown/公式分段、MathJax 配置和资源、代码围栏、内容块编辑与缓存清理决策。
 成功打包后，仓库根目录会生成 `papertranslate.xpi`。
 
 ## 注意

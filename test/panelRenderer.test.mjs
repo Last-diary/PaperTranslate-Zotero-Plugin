@@ -4,9 +4,8 @@ import fs from "node:fs";
 import vm from "node:vm";
 import {
   MARKDOWN_SANITIZE_OPTIONS,
-  MATH_SANITIZE_OPTIONS,
-  stripKatexSourceAnnotations,
   TABLE_SANITIZE_OPTIONS,
+  normalizeMathSource,
   safeBlockTypeClass
 } from "../chrome/content/modules/ui/panelRenderer.mjs";
 import {
@@ -25,19 +24,6 @@ function loadMarked() {
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   return sandbox.marked;
-}
-
-function loadKatex() {
-  const source = fs.readFileSync(
-    new URL("../chrome/content/vendor/katex/katex.min.js", import.meta.url),
-    "utf8"
-  );
-  const sandbox = {};
-  sandbox.globalThis = sandbox;
-  sandbox.self = sandbox;
-  vm.createContext(sandbox);
-  vm.runInContext(source, sandbox);
-  return sandbox.katex;
 }
 
 test("vendored Marked 18 parses GFM and preserves math tokens", () => {
@@ -101,26 +87,12 @@ test("inline math spacing preserves display math, code, currency, and escapes", 
   assert.equal(normalizeInlineMathSpacing(source), expected);
 });
 
-test("KaTeX visual HTML preserves complex layouts without source annotations", () => {
-  const katex = loadKatex();
+test("MathJax source normalization preserves complex TeX without exposing HTML", () => {
   const tex = String.raw`\text{fix rate}=\underset{\text{problems}}{\mathbb{E}}\left[\frac{c}{n}\right]\tag{1}`;
-  const markup = katex.renderToString(tex, {
-    displayMode: true,
-    output: "htmlAndMathml",
-    throwOnError: false
-  });
-
-  assert.match(markup, /<annotation encoding="application\/x-tex">/);
-  assert.match(markup, /class="katex-html"/);
-  assert.match(markup, /class="mop op-limits"/);
-  assert.match(markup, /problems/);
-
-  const stripped = stripKatexSourceAnnotations(markup);
-  assert.match(stripped, /<math\b/);
-  assert.match(stripped, /class="katex-html"/);
-  assert.match(stripped, /<mfrac>/);
-  assert.doesNotMatch(stripped, /<annotation\b/);
-  assert.doesNotMatch(stripped, /\\underset/);
+  const source = normalizeMathSource(tex, true);
+  assert.equal(source, String.raw`\[\text{fix rate}=\underset{\text{problems}}{\mathbb{E}}\left[\frac{c}{n}\right]\tag{1}\]`);
+  assert.doesNotMatch(source, /<[^>]+>/);
+  assert.equal(normalizeMathSource("$x_1$", false), String.raw`\(x_1\)`);
 });
 
 test("sanitizer allow-lists exclude active content and remote images", () => {
@@ -130,10 +102,8 @@ test("sanitizer allow-lists exclude active content and remote images", () => {
   assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_TAGS.includes("script"));
   assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_ATTR.includes("onclick"));
   assert.ok(MARKDOWN_SANITIZE_OPTIONS.FORBID_ATTR.includes("style"));
-  assert.equal(MATH_SANITIZE_OPTIONS.USE_PROFILES.mathMl, true);
-  assert.equal(MATH_SANITIZE_OPTIONS.USE_PROFILES.svg, true);
-  assert.ok(!MATH_SANITIZE_OPTIONS.FORBID_TAGS.includes("svg"));
-  assert.ok(!MATH_SANITIZE_OPTIONS.FORBID_ATTR?.includes("style"));
+  assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_TAGS.includes("math"));
+  assert.ok(!MARKDOWN_SANITIZE_OPTIONS.ALLOWED_TAGS.includes("svg"));
 
   assert.deepEqual(
     TABLE_SANITIZE_OPTIONS.ALLOWED_ATTR.slice().sort(),

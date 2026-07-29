@@ -203,10 +203,18 @@ body.papertranslate-panel-open #reader-ui .split-view {
 .pt-equation-math {
   display:block; min-width:max-content; padding:8px 4px; overflow-x:auto; text-align:center;
 }
-.pt-math-inline { display:inline; white-space:normal; }
-.pt-math-inline math { display:inline; font-size:1.05em; }
-.pt-math-display { display:block; margin:.4em 0; overflow-x:auto; text-align:center; }
-.pt-math-display math,.pt-equation-math math { display:block; margin:.35em auto; font-size:1.08em; }
+#papertranslate-panel mjx-container { max-width:100%; font-size:1.05em; }
+#papertranslate-panel .pt-math-source { white-space:normal; }
+#papertranslate-panel .pt-math-source.pt-math-fallback {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+#papertranslate-panel mjx-container[display="true"] {
+  display:block; margin:.4em 0; overflow-x:auto; overflow-y:hidden; text-align:center;
+}
+.pt-equation-math > mjx-container[display="true"] {
+  margin:.35em auto; font-size:1.08em;
+}
 .pt-math-fallback {
   padding:2px 6px; border-radius:4px; background:#f3f4f6; color:var(--pt-danger);
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em;

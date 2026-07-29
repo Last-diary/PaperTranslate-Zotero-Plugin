@@ -6,9 +6,9 @@ export const ctx = {
   version: "",
   rootURI: "",
   shuttingDown: false,
-  // 本地打包的渲染依赖。DOMPurify 保留工厂函数，并在每个 Reader
+  // 本地打包的同步渲染依赖。DOMPurify 保留工厂函数，并在每个 Reader
   // window 中分别创建实例，避免跨 privileged compartment 传递 DOM。
-  katex: null,
+  // MathJax 则由每个 Reader document 独立加载，避免共享错误的 document。
   marked: null,
   createDOMPurify: null,
   vendorSandboxes: []

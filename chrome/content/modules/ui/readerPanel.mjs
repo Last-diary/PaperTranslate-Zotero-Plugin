@@ -20,21 +20,18 @@ import {
   shouldEditSource
 } from "./blockEditing.mjs";
 import { normalizeCodeBlock } from "./codeBlock.mjs";
-import {
-  KATEX_STYLESHEET_URL,
-  prepareKatexStyles
-} from "./katexStyles.mjs";
 import { normalizeInlineMathSpacing } from "./markdownMath.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
+import { createMathJaxController } from "./mathJax.mjs";
 
 const PANEL_ID = "papertranslate-panel";
 const RESIZER_ID = "papertranslate-resizer";
 const WORKSPACE_ID = "papertranslate-workspace";
 const PANEL_OPEN_CLASS = "papertranslate-panel-open";
 const PANEL_OCCUPIED_WIDTH_VAR = "--papertranslate-panel-occupied-width";
+const PANEL_STYLE_ID = "papertranslate-reader-panel-style";
 const DEFAULT_WIDTH = 440;
 const DEFAULT_WIDTH_RATIO = 0.5;
-let katexStyles = "";
 const MIN_WIDTH = 280;
 const AUTO_TRANSLATE_DEBOUNCE_MS = 300;
 const AUTO_TRANSLATE_PREFETCH_PX = 160;
@@ -46,6 +43,7 @@ let lastWidth = DEFAULT_WIDTH;
 let lastUserWidthRatio = null;
 
 const panelStates = new WeakMap();
+const activePanelStates = new Set();
 const styledDocuments = new WeakSet();
 
 // ---------- 显示过滤（移植自 public/src/modules/displayFilter.mjs） ----------
@@ -346,23 +344,6 @@ function applyReadingPreferences(state, reading) {
   );
 }
 
-function loadKatexStyles() {
-  if (katexStyles) return katexStyles;
-  // Zotero 没有公开的插件 API 用于把已注册 chrome package 中的样式表
-  // 读取为文本。官方 Reader 也通过 Zotero.File.getContentsFromURL()
-  // 读取内置 resource:// 文本，因此把这项稳定内部访问集中在此处并先做
-  // 能力检测；接口或资源不可用时安全中止面板创建，避免展示错位公式。
-  const css = ctx.Zotero?.File?.getContentsFromURL?.(KATEX_STYLESHEET_URL);
-  if (!css || !String(css).includes(".katex")) {
-    throw new Error("KaTeX 样式加载失败");
-  }
-  katexStyles = prepareKatexStyles(css);
-  ctx.Zotero?.debug?.(
-    `[PaperTranslate][katex-html-v1] loaded ${katexStyles.length} CSS characters`
-  );
-  return katexStyles;
-}
-
 function ensurePanelStyles(doc) {
   if (styledDocuments.has(doc)) return;
   // Reader 文档位于另一个 privileged compartment。读取 adoptedStyleSheets
@@ -370,7 +351,8 @@ function ensurePanelStyles(doc) {
   // <style> 可避免跨 compartment 传递 CSSStyleSheet。Zotero Reader 自身
   // 的 _injectCSS() 也采用相同方式。
   const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
-  style.textContent = `${loadKatexStyles()}\n${READER_PANEL_CSS}`;
+  style.id = PANEL_STYLE_ID;
+  style.textContent = READER_PANEL_CSS;
   (doc.head || doc.documentElement).appendChild(style);
   styledDocuments.add(doc);
 }
@@ -838,6 +820,10 @@ function attachSideBySide(state) {
 function detachPanel(state) {
   const doc = state.doc;
   state.disposed = true;
+  state.mathJax?.dispose();
+  state.mathJax = null;
+  activePanelStates.delete(state);
+  panelStates.delete(state.win);
   clearPdfLocatorHighlight(state);
   unbindPdfContextBridge(state);
   if (state.autoTranslateTimer) {
@@ -876,6 +862,8 @@ function detachPanel(state) {
   state.workspace?.remove();
   state.workspace = null;
   state.splitView = null;
+  doc.getElementById(PANEL_STYLE_ID)?.remove();
+  styledDocuments.delete(doc);
   try {
     state.win.dispatchEvent(new state.win.Event("resize"));
   } catch {}
@@ -929,15 +917,20 @@ function blockSection(state, id) {
 }
 
 function refreshBlockSection(state, block) {
-  const section = blockSection(state, block.id);
-  if (!section) return;
-  const html = blockBodyHtml(block, state);
-  if (!html) return;
-  section.innerHTML = html;
-  section.classList.remove("pt-editing");
-  section.setAttribute(
-    "data-translated",
-    state.mode === "translation" && state.translations[block.id] ? "1" : "0"
+  return state.mathJax.replace(
+    () => {
+      const section = blockSection(state, block.id);
+      if (!section) return [];
+      const html = blockBodyHtml(block, state);
+      if (!html) return [];
+      section.innerHTML = html;
+      section.classList.remove("pt-editing");
+      section.setAttribute(
+        "data-translated",
+        state.mode === "translation" && state.translations[block.id] ? "1" : "0"
+      );
+      return [section];
+    }
   );
 }
 
@@ -978,7 +971,7 @@ async function retranslateBlock(state, block) {
     if (state.disposed) return;
     state.translations = result.translations;
     await clearCompletedSourceRetranslations(state, [block.id], state.translations);
-    refreshBlockSection(state, block);
+    await refreshBlockSection(state, block);
     updateTranslationStatus(state);
     setFooter(
       state,
@@ -1045,7 +1038,9 @@ function editBlockContent(state, block) {
   editor.append(editorInput, actions);
   section.appendChild(editor);
 
-  const cancel = () => refreshBlockSection(state, block);
+  const cancel = () => {
+    void refreshBlockSection(state, block).catch((error) => ctx.Zotero.logError(error));
+  };
   const save = async () => {
     const value = editorInput.innerText.replace(/\r\n?/g, "\n").trim();
     if (!value) {
@@ -1054,7 +1049,7 @@ function editBlockContent(state, block) {
       return;
     }
     if (value === previousValue) {
-      refreshBlockSection(state, block);
+      await refreshBlockSection(state, block);
       setFooter(state, "内容未更改。");
       return;
     }
@@ -1090,7 +1085,7 @@ function editBlockContent(state, block) {
         setBlockSourceText(block, value);
         state.eligibleIds = eligibleTranslationIds(state.blocks, getConfig().translation);
         renderToc(state);
-        refreshBlockSection(state, block);
+        await refreshBlockSection(state, block);
         updateTranslationStatus(state);
         setFooter(
           state,
@@ -1114,7 +1109,7 @@ function editBlockContent(state, block) {
         }
         state.translations = nextTranslations;
         state.pendingSourceTranslationIds = nextPendingIds;
-        refreshBlockSection(state, block);
+        await refreshBlockSection(state, block);
         updateTranslationStatus(state);
         setFooter(state, "当前块译文已保存。");
       }
@@ -1615,35 +1610,45 @@ function renderToc(state) {
 }
 
 function renderBlocks(state) {
-  closeBlockContextMenu(state);
-  const scrollAnchor = captureBlockScrollAnchor(state);
-  state.els.body.innerHTML = state.blocks.map((block) => blockSectionHtml(block, state)).join("");
-  restoreBlockScrollAnchor(state, scrollAnchor);
-  updateModeButtons(state);
-  const count = updateTranslationStatus(state);
-  setFooter(state, `共 ${state.blocks.length} 块 · 已译 ${count} 段 · ${state.mode === "translation" ? "译文" : "原文"}模式`);
-  if (state.mode === "translation") scheduleVisibleTranslation(state);
+  return state.mathJax.replace(
+    () => {
+      closeBlockContextMenu(state);
+      const scrollAnchor = captureBlockScrollAnchor(state);
+      state.els.body.innerHTML = state.blocks.map((block) => blockSectionHtml(block, state)).join("");
+      restoreBlockScrollAnchor(state, scrollAnchor);
+      updateModeButtons(state);
+      const count = updateTranslationStatus(state);
+      setFooter(state, `共 ${state.blocks.length} 块 · 已译 ${count} 段 · ${state.mode === "translation" ? "译文" : "原文"}模式`);
+      if (state.mode === "translation") scheduleVisibleTranslation(state);
+      return [state.els.body];
+    }
+  );
 }
 
 // 翻译进行中：只更新本次新译出的块，避免整列表重排
 function updateTranslatedBlocks(state) {
-  updateTranslationStatus(state);
-  if (state.mode !== "translation") return;
-  const scrollAnchor = captureBlockScrollAnchor(state);
-  let updated = false;
-  const sections = state.els.body.querySelectorAll("section[data-id][data-translated='0']");
-  for (const section of sections) {
-    const id = section.getAttribute("data-id");
-    const block = state.blockById.get(id);
-    if (!block || !state.translations[id]) continue;
-    const html = blockBodyHtml(block, state);
-    if (html) {
-      section.innerHTML = html;
-      section.setAttribute("data-translated", "1");
-      updated = true;
+  return state.mathJax.replace(
+    () => {
+      updateTranslationStatus(state);
+      if (state.mode !== "translation") return [];
+      const scrollAnchor = captureBlockScrollAnchor(state);
+      const changed = [];
+      const sections = state.els.body.querySelectorAll("section[data-id][data-translated='0']");
+      for (const section of sections) {
+        const id = section.getAttribute("data-id");
+        const block = state.blockById.get(id);
+        if (!block || !state.translations[id]) continue;
+        const html = blockBodyHtml(block, state);
+        if (html) {
+          section.innerHTML = html;
+          section.setAttribute("data-translated", "1");
+          changed.push(section);
+        }
+      }
+      if (changed.length) restoreBlockScrollAnchor(state, scrollAnchor);
+      return changed;
     }
-  }
-  if (updated) restoreBlockScrollAnchor(state, scrollAnchor);
+  );
 }
 
 function syncTranslationMasks(state) {
@@ -1731,7 +1736,7 @@ async function queueVisibleTranslation(state) {
         if (state.disposed) return;
         state.translations = cache;
         revealCompletedMasks(state, ids, cache);
-        updateTranslatedBlocks(state);
+        void updateTranslatedBlocks(state).catch((error) => ctx.Zotero.logError(error));
         setFooter(state, `正在自动翻译当前屏幕… ${done}/${total} 段`);
       }
     });
@@ -1739,7 +1744,7 @@ async function queueVisibleTranslation(state) {
       state.translations = result.translations;
       await clearCompletedSourceRetranslations(state, ids, result.translations);
       revealCompletedMasks(state, ids, result.translations);
-      updateTranslatedBlocks(state);
+      await updateTranslatedBlocks(state);
       setFooter(state, `当前屏幕自动翻译完成：新增 ${result.translated} 段。`);
     }
   } catch (error) {
@@ -1800,7 +1805,7 @@ async function retranslateEditedOriginalBlocks(state) {
         if (state.disposed) return;
         state.translations = cache;
         revealCompletedMasks(state, ids, cache);
-        updateTranslatedBlocks(state);
+        void updateTranslatedBlocks(state).catch((error) => ctx.Zotero.logError(error));
         setFooter(state, `原文已修改，正在自动重新翻译… ${done}/${total} 段`);
       }
     });
@@ -1808,7 +1813,7 @@ async function retranslateEditedOriginalBlocks(state) {
     state.translations = result.translations;
     await clearCompletedSourceRetranslations(state, ids, state.translations);
     revealCompletedMasks(state, ids, state.translations);
-    updateTranslatedBlocks(state);
+    await updateTranslatedBlocks(state);
     const remaining = ids.filter((id) => state.pendingSourceTranslationIds.has(id)).length;
     setFooter(
       state,
@@ -1855,7 +1860,7 @@ async function translateAllInPanel(state) {
         if (state.disposed) return;
         state.translations = cache;
         revealCompletedMasks(state, ids, cache);
-        updateTranslatedBlocks(state);
+        void updateTranslatedBlocks(state).catch((error) => ctx.Zotero.logError(error));
         setFooter(state, `翻译中… ${done}/${total} 段`);
       }
     });
@@ -1863,7 +1868,7 @@ async function translateAllInPanel(state) {
       state.translations = result.translations;
       await clearCompletedSourceRetranslations(state, ids, result.translations);
       revealCompletedMasks(state, ids, result.translations);
-      updateTranslatedBlocks(state);
+      await updateTranslatedBlocks(state);
       setFooter(state, `翻译完成：本次 ${result.translated} 段，缓存共 ${translatedCount(state)} 段。`);
     }
   } catch (error) {
@@ -1914,31 +1919,43 @@ async function reloadPanelInner(state) {
     state.sourceOverrides = {};
     state.pendingSourceTranslationIds = new Set();
     state.blockById = new Map();
-    state.els.body.textContent = "";
-    const hint = el(state.doc, "div", "padding:20px; line-height:2;");
-    hint.textContent = "此 PDF 尚未用 MinerU 解析。";
-    const parseBtn = makeHeaderButton(state.doc, "立即解析", "上传 PDF 到 MinerU 并解析（需要 API Token）");
-    parseBtn.style.cssText = "padding:4px 14px; cursor:pointer;";
-    const parseNow = async () => {
-      if (parseBtn.disabled) return;
-      parseBtn.disabled = true;
-      parseBtn.textContent = "正在解析…";
-      try {
-        await importAttachment(attachment, { onProgress: (text) => setFooter(state, text) });
-        if (!state.disposed) await reloadPanel(state);
-      } catch (error) {
-        setFooter(state, `解析失败：${error.message || error}`);
-        parseBtn.disabled = false;
-        parseBtn.textContent = "重试解析";
+    let parseNow = null;
+    await state.mathJax.replace(
+      () => {
+        state.els.body.textContent = "";
+        const hint = el(state.doc, "div", "padding:20px; line-height:2;");
+        hint.textContent = "此 PDF 尚未用 MinerU 解析。";
+        const parseBtn = makeHeaderButton(
+          state.doc,
+          "立即解析",
+          "上传 PDF 到 MinerU 并解析（需要 API Token）"
+        );
+        parseBtn.style.cssText = "padding:4px 14px; cursor:pointer;";
+        parseNow = async () => {
+          if (parseBtn.disabled) return;
+          parseBtn.disabled = true;
+          parseBtn.textContent = "正在解析…";
+          try {
+            await importAttachment(attachment, { onProgress: (text) => setFooter(state, text) });
+            if (!state.disposed) await reloadPanel(state);
+          } catch (error) {
+            setFooter(state, `解析失败：${error.message || error}`);
+            parseBtn.disabled = false;
+            parseBtn.textContent = "重试解析";
+          }
+        };
+        parseBtn.addEventListener("click", () => {
+          void parseNow();
+        });
+        hint.appendChild(parseBtn);
+        state.els.body.appendChild(hint);
+        setFooter(state, "未解析");
+        return [state.els.body];
       }
-    };
-    parseBtn.addEventListener("click", parseNow);
-    hint.appendChild(parseBtn);
-    state.els.body.appendChild(hint);
-    setFooter(state, "未解析");
+    );
     if (state.autoParseOnOpen) {
       state.autoParseOnOpen = false;
-      await parseNow();
+      await parseNow?.();
     }
     return;
   }
@@ -1966,7 +1983,7 @@ async function reloadPanelInner(state) {
   if (imageCount) setFooter(state, `加载图片… 0/${imageCount}`);
   const imageResult = await prepareImageSources(state, blocks);
   renderToc(state);
-  renderBlocks(state);
+  await renderBlocks(state);
   if (imageResult.failed) {
     setFooter(state, `正文已加载 · 图片 ${imageResult.loaded} 成功，${imageResult.failed} 失败`);
   }
@@ -2003,14 +2020,14 @@ function attachPanelEvents(state) {
       state.autoTranslateTimer = null;
     }
     state.autoTranslateQueued.clear();
-    renderBlocks(state);
+    void renderBlocks(state).catch((error) => ctx.Zotero.logError(error));
   });
   els.translationBtn.addEventListener("click", () => {
     if (state.mode === "translation") return;
     closeBlockContextMenu(state);
     state.mode = "translation";
     state.autoTranslateFailed = false;
-    renderBlocks(state);
+    void renderBlocks(state).catch((error) => ctx.Zotero.logError(error));
     retranslateEditedOriginalBlocks(state).catch((error) => {
       if (!state.disposed) {
         setFooter(state, `自动重译失败：${error.message || error}`);
@@ -2299,8 +2316,7 @@ async function togglePanel(reader) {
   const renderer = createPanelRenderer({
     markedNamespace: ctx.marked,
     createDOMPurify: ctx.createDOMPurify,
-    win,
-    katex: ctx.katex
+    win
   });
   const els = buildPanelShell(doc);
   const state = {
@@ -2309,6 +2325,7 @@ async function togglePanel(reader) {
     doc,
     els,
     renderer,
+    mathJax: null,
     mode: "translation",
     blocks: [],
     blockById: new Map(),
@@ -2349,11 +2366,20 @@ async function togglePanel(reader) {
     pdfCenterTimer: null,
     pdfHighlightNode: null
   };
+  state.mathJax = createMathJaxController(win);
   panelStates.set(win, state);
+  activePanelStates.add(state);
   attachSideBySide(state);
   attachPanelEvents(state);
   bindPdfContextBridge(state);
+  await state.mathJax.ensureLoaded();
   await reloadPanel(state);
+  if (state.mathJax.error) {
+    setFooter(
+      state,
+      `正文已加载，但 MathJax 排版不可用：${state.mathJax.error.message || state.mathJax.error}`
+    );
+  }
 }
 
 // ---------- 入口：注册 Reader 工具栏按钮 ----------
@@ -2405,4 +2431,14 @@ export function registerReader(pluginID) {
     });
     append(button);
   }, pluginID);
+}
+
+export function shutdownReaderPanels() {
+  for (const state of [...activePanelStates]) {
+    try {
+      detachPanel(state);
+    } catch (error) {
+      ctx.Zotero?.logError?.(error);
+    }
+  }
 }
