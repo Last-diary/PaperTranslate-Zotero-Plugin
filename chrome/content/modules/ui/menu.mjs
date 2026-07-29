@@ -122,11 +122,13 @@ const MENU_DEFS = [
   },
   {
     l10nID: "papertranslate-menu-delete-translation-cache",
+    icon: "icons/delete-translation-cache-16.svg",
     isVisible: (context) => selectedPdfAttachments(context).length > 0,
     onCommand: COMMANDS.clearTranslationCache
   },
   {
     l10nID: "papertranslate-menu-delete-all-caches",
+    icon: "icons/delete-all-caches-16.svg",
     isVisible: (context) => selectedPdfAttachments(context).length > 0,
     onCommand: COMMANDS.clearAllCaches
   }
