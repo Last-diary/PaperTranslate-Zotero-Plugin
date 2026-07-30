@@ -11,7 +11,7 @@
 
 兼容 **Zotero 7 / 8 / 9**。
 
-## 当前测试版本：0.4.9 RC1（Manifest 0.4.8.1）
+## 当前开发版本（基于 0.4.9 RC1，Manifest 0.4.8.1）
 
 - Reader 内容渲染迁移到 **Marked 18 + DOMPurify 3.4.12**，支持 GFM、围栏代码、
   Markdown 表格和经过白名单净化的链接、表格与公式输出。
@@ -24,19 +24,12 @@
 - Zotero 条目移入回收站时保留 PaperTranslate 缓存；彻底删除后自动清理对应解析、
   翻译和原文编辑数据，启动时也会保守清理孤立缓存。
 - 条目右键菜单的解析、翻译和两项缓存删除命令均使用统一的 16×16 主题图标。
-
-## 功能对照
-
-| 原 Node 项目 | 本插件 |
-| --- | --- |
-| `server/mineru.js`、`server/translation.js`、`server/toc.js` | 直接移植为插件内 ESM 模块（`chrome/content/modules/`） |
-| `papers/` 解析产物与译文缓存 | `Zotero 数据目录/papertranslate/<附件Key>/`（不随 Zotero 同步上传） |
-| HTTP 服务 + 鉴权 + 论文列表 + 浏览器扩展 | 删除，由 Zotero 原生能力替代 |
-| 左侧 pdf.js 阅读器 | Zotero Reader（原生，含批注） |
-| 右侧重排/译文栏 | Reader 文档中的同级面板，通过 CSS 为原生 PDF 区域预留宽度 |
-| PDF 联动 | 点击内容块定位并高亮 PDF；PDF 右键可反向定位右侧内容 |
-| PDF 缩略图 | 继续使用 Zotero Reader 原生缩略图，不重建 PDF iframe |
-| PDF 大纲联动、连续滚动同步 | 暂未移植（见路线图） |
+- 设置页可直接打开 PaperTranslate 数据目录，并优化了阅读选项的说明文案。
+- 未识别的 MinerU 源标签会保留为可见文本，避免内容被误当作 HTML 或静默丢失。
+- 原文模式下可对文本类内容块单独重新解析；插件按块的全部 PDF 区域截图，
+  支持跨页和多栏段落，并在处理过程中保持 Reader 当前滚动位置。
+- Reader 面板会持续显示 PDF 解析的等待、进度和失败状态；失败后可直接重试，
+  无需关闭或重建面板。
 
 ## 安装
 
@@ -45,11 +38,6 @@
 从 [Releases](https://github.com/Last-diary/PaperTranslate-Zotero-Plugin/releases/latest)
 下载 `papertranslate.xpi`，然后进入 Zotero → 工具 → 插件（Plugins）→ 齿轮 →
 Install Add-on From File… 并选择下载的文件。
-
-> **注意**：Zotero 强制要求插件 manifest 中声明 `applications.zotero.update_url`（缺一不可安装）。
-> 当前 `manifest.json` 中使用的是占位地址 `https://example.com/papertranslate-zotero/updates.json`，
-> 因此当前版本需要从 Release 手动下载更新；如果要启用自动更新，请把它换成真实的 updates.json 地址
-> （格式见 [Zotero 插件更新清单文档](https://www.zotero.org/support/dev/zotero_7_for_developers#updaterdf--updatesjson)）。
 
 ### 方式二：开发模式（免打包）
 
