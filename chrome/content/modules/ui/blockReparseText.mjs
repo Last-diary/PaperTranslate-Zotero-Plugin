@@ -16,6 +16,10 @@ export function canReparseBlock(block) {
   );
 }
 
+export function canReparseAndTranslateBlock(block, eligibleIds) {
+  return canReparseBlock(block) && Boolean(eligibleIds?.has?.(block.id));
+}
+
 function extractedText(block) {
   if (block?.type === "code") {
     return String(block.code_body || block.text || "").trim();

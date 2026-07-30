@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  canReparseAndTranslateBlock,
   canReparseBlock,
   replacementTextFromMineru
 } from "../chrome/content/modules/ui/blockReparseText.mjs";
@@ -30,6 +31,16 @@ test("reparse scope matches editable text-like blocks and skips structured block
       pageSize: [1000, 1000]
     }]
   }), false);
+});
+
+test("reparse and translate is offered only for reparseable eligible blocks", () => {
+  const block = locatedBlock("text");
+  assert.equal(canReparseAndTranslateBlock(block, new Set([block.id])), true);
+  assert.equal(canReparseAndTranslateBlock(block, new Set()), false);
+  assert.equal(
+    canReparseAndTranslateBlock(locatedBlock("table"), new Set(["block-1"])),
+    false
+  );
 });
 
 test("reparse result joins MinerU text blocks as one editable source string", () => {

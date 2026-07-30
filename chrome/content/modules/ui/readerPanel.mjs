@@ -24,11 +24,19 @@ import {
   setBlockSourceText,
   shouldEditSource
 } from "./blockEditing.mjs";
-import { canReparseBlock } from "./blockReparseText.mjs";
+import {
+  canReparseAndTranslateBlock,
+  canReparseBlock
+} from "./blockReparseText.mjs";
 import { normalizeCodeBlock } from "./codeBlock.mjs";
 import { normalizeInlineMathSpacing } from "./markdownMath.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 import { createMathJaxController } from "./mathJax.mjs";
+import {
+  createParserStateView,
+  parserStatePresentation,
+  updateParserStateView
+} from "./readerParserState.mjs";
 import {
   blockCropViewRect,
   renderBlockRegionsCrop
@@ -441,6 +449,10 @@ function populateBlockContextMenu(state) {
     addCommand("copy-original", "复制原文");
     addSeparator();
     addCommand("retranslate", "重新翻译");
+    const block = state.blockById.get(state.contextBlockId);
+    if (canReparseAndTranslateBlock(block, state.eligibleIds)) {
+      addCommand("reparse-translate", "重新解析并翻译");
+    }
     addCommand("edit", "编辑内容");
     addSeparator();
     addCommand("locate", "在 PDF 中定位");
@@ -508,7 +520,9 @@ function buildPanelShell(doc) {
     header,
     tocNav,
     content,
+    paneLabel,
     translationStatus,
+    modeGroup,
     originalBtn,
     translationBtn,
     translateBtn,
@@ -887,6 +901,23 @@ function setFooter(state, text) {
   state.els.footer.textContent = text;
 }
 
+function setParserShellState(state, phase = null) {
+  const parsing = Boolean(phase);
+  state.els.modeGroup.hidden = parsing;
+  state.els.translateBtn.hidden = parsing;
+  state.els.originalBtn.disabled = parsing;
+  state.els.translationBtn.disabled = parsing;
+  state.els.translateBtn.disabled = parsing;
+  state.els.body.classList.toggle("pt-parser-host", parsing);
+  state.els.content.classList.toggle("pt-parser-content", parsing);
+  state.els.paneLabel.textContent = parsing
+    ? "MinerU 解析"
+    : "重新排版（点击可定位左侧 PDF）";
+  if (parsing) {
+    state.els.translationStatus.textContent = parserStatePresentation(phase).status;
+  }
+}
+
 const BLOCK_MENU_LOG_PREFIX = "[PaperTranslate][block-context-menu]";
 
 function debugBlockContextMenu(stage, details = {}) {
@@ -963,6 +994,22 @@ async function copyBlockText(state, text, label) {
   setFooter(state, `${label}已复制。`);
 }
 
+async function forceTranslateBlock(state, block) {
+  const service = new TranslationService();
+  const result = await service.translateBlocks({
+    dir: state.dir,
+    allBlocks: state.blocks,
+    ids: [block.id],
+    force: true
+  });
+  if (state.disposed) return null;
+  state.translations = result.translations;
+  await clearCompletedSourceRetranslations(state, [block.id], state.translations);
+  await refreshBlockSection(state, block);
+  updateTranslationStatus(state);
+  return result;
+}
+
 async function retranslateBlock(state, block) {
   if (state.translationBusy || state.translatingIds.has(block.id)) {
     setFooter(state, "翻译任务正在进行，请稍后重试。");
@@ -975,18 +1022,8 @@ async function retranslateBlock(state, block) {
   syncTranslationMasks(state);
   setFooter(state, "正在重新翻译当前块…");
   try {
-    const service = new TranslationService();
-    const result = await service.translateBlocks({
-      dir: state.dir,
-      allBlocks: state.blocks,
-      ids: [block.id],
-      force: true
-    });
-    if (state.disposed) return;
-    state.translations = result.translations;
-    await clearCompletedSourceRetranslations(state, [block.id], state.translations);
-    await refreshBlockSection(state, block);
-    updateTranslationStatus(state);
+    const result = await forceTranslateBlock(state, block);
+    if (!result) return;
     setFooter(
       state,
       result.translated ? "当前块已重新翻译。" : "重新翻译完成，但没有返回新的译文。"
@@ -1046,7 +1083,7 @@ async function dataUrlBytes(dataUrl) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-async function reparseBlock(state, block) {
+async function reparseBlock(state, block, { translateAfter = false } = {}) {
   if (!canReparseBlock(block)) {
     setFooter(state, "当前块类型暂不支持重新解析。");
     return;
@@ -1062,8 +1099,10 @@ async function reparseBlock(state, block) {
   syncTranslationMasks(state);
   setFooter(state, "正在截取当前块…");
   ctx.Zotero.debug?.(
-    `PaperTranslate block-reparse-regions-v5-no-navigation: start block=${block.id} type=${block.type} regions=${regionsForBlock(block).length}`
+    `PaperTranslate block-reparse-regions-v6-translate-after: start block=${block.id} `
+    + `type=${block.type} regions=${regionsForBlock(block).length} translateAfter=${translateAfter}`
   );
+  let reparseCompleted = false;
   try {
     const image = await renderBlockRegionsCrop(state.reader, block, {
       paddingRatio: 0,
@@ -1082,11 +1121,35 @@ async function reparseBlock(state, block) {
     if (!ctx.Zotero.Items.exists(state.attachment.id)) {
       throw new Error("PDF 附件已删除，无法保存重新解析结果。");
     }
-    if (replacement === blockSourceText(block)) {
+    const changed = replacement !== blockSourceText(block);
+    let needsTranslation = state.eligibleIds.has(block.id);
+    if (changed) {
+      ({ needsTranslation } = await saveOriginalBlockText(state, block, replacement));
+    }
+    reparseCompleted = true;
+
+    if (translateAfter && needsTranslation) {
+      setFooter(
+        state,
+        changed
+          ? "当前块已重新解析，正在翻译新原文…"
+          : "重新解析内容没有变化，正在重新翻译当前块…"
+      );
+      const result = await forceTranslateBlock(state, block);
+      if (!result) return;
+      setFooter(
+        state,
+        result.translated
+          ? "当前块已重新解析并翻译。"
+          : "当前块已重新解析，但没有返回新的译文。"
+      );
+      return;
+    }
+
+    if (!changed) {
       setFooter(state, "重新解析完成，内容没有变化。");
       return;
     }
-    const { needsTranslation } = await saveOriginalBlockText(state, block, replacement);
     setFooter(
       state,
       needsTranslation
@@ -1095,7 +1158,12 @@ async function reparseBlock(state, block) {
     );
   } catch (error) {
     if (!state.disposed) {
-      setFooter(state, `重新解析失败：${error.message || error}`);
+      const prefix = translateAfter && reparseCompleted
+        ? "当前块已重新解析，但翻译失败"
+        : translateAfter
+          ? "重新解析并翻译失败"
+          : "重新解析失败";
+      setFooter(state, `${prefix}：${error.message || error}`);
       ctx.Zotero.logError(error);
     }
   } finally {
@@ -1106,6 +1174,20 @@ async function reparseBlock(state, block) {
       state.els.translateBtn.disabled = false;
     }
   }
+}
+
+function updateActiveParserState(state, phase, detail = "") {
+  if (!state.parserView) return false;
+  if (state.parserPhase !== phase) {
+    state.parserPhase = phase;
+    ctx.Zotero?.debug?.(
+      `PaperTranslate parser-state-v2-atomic-transition: phase=${phase}`
+    );
+  }
+  setParserShellState(state, phase);
+  const presentation = updateParserStateView(state.parserView, phase, detail);
+  setFooter(state, presentation.detail);
+  return true;
 }
 
 function editBlockContent(state, block) {
@@ -1249,7 +1331,12 @@ function showBlockContextMenu(state, block, clientX, clientY) {
   const busy = state.translationBusy || state.translatingIds.has(block.id);
   const buttons = menu.querySelectorAll("button[data-action]");
   for (const button of buttons) {
-    button.disabled = busy && ["retranslate", "reparse", "edit"].includes(button.dataset.action);
+    button.disabled = busy && [
+      "retranslate",
+      "reparse",
+      "reparse-translate",
+      "edit"
+    ].includes(button.dataset.action);
   }
   debugBlockContextMenu("buttons-ready", {
     blockId: block.id,
@@ -1705,6 +1792,14 @@ function renderToc(state) {
 function renderBlocks(state) {
   return state.mathJax.replace(
     () => {
+      // 首次解析完成后，保持居中的解析状态直至正文 HTML 已经准备好。
+      // 在同一个同步 DOM 变更中退出解析布局并替换正文，避免旧状态节点
+      // 被普通文章布局临时挤到左上角。
+      if (state.parserView) {
+        setParserShellState(state);
+        state.parserView = null;
+        state.parserPhase = null;
+      }
       closeBlockContextMenu(state);
       const scrollAnchor = captureBlockScrollAnchor(state);
       state.els.body.innerHTML = state.blocks.map((block) => blockSectionHtml(block, state)).join("");
@@ -2011,38 +2106,43 @@ async function reloadPanelInner(state) {
     state.translations = {};
     state.sourceOverrides = {};
     state.pendingSourceTranslationIds = new Set();
+    state.eligibleIds = new Set();
     state.blockById = new Map();
     let parseNow = null;
+    let parsing = false;
     await state.mathJax.replace(
       () => {
         state.els.body.textContent = "";
-        const hint = el(state.doc, "div", "padding:20px; line-height:2;");
-        hint.textContent = "此 PDF 尚未用 MinerU 解析。";
-        const parseBtn = makeHeaderButton(
-          state.doc,
-          "立即解析",
-          "上传 PDF 到 MinerU 并解析（需要 API Token）"
-        );
-        parseBtn.style.cssText = "padding:4px 14px; cursor:pointer;";
+        setParserShellState(state, "idle");
         parseNow = async () => {
-          if (parseBtn.disabled) return;
-          parseBtn.disabled = true;
-          parseBtn.textContent = "正在解析…";
+          if (parsing) return;
+          parsing = true;
+          updateActiveParserState(state, "loading");
           try {
-            await importAttachment(attachment, { onProgress: (text) => setFooter(state, text) });
-            if (!state.disposed) await reloadPanel(state);
+            await importAttachment(attachment, {
+              onProgress: (text) => {
+                if (state.disposed) return;
+                updateActiveParserState(state, "loading", text);
+              }
+            });
+            if (!state.disposed) {
+              updateActiveParserState(state, "preparing", "正在整理解析结果…");
+              await reloadPanel(state);
+            }
           } catch (error) {
-            setFooter(state, `解析失败：${error.message || error}`);
-            parseBtn.disabled = false;
-            parseBtn.textContent = "重试解析";
+            if (state.disposed) return;
+            const message = error.message || String(error);
+            updateActiveParserState(state, "error", message);
+            setFooter(state, `解析失败：${message}`);
+          } finally {
+            parsing = false;
           }
         };
-        parseBtn.addEventListener("click", () => {
-          void parseNow();
+        state.parserView = createParserStateView(state.doc, {
+          onAction: () => void parseNow()
         });
-        hint.appendChild(parseBtn);
-        state.els.body.appendChild(hint);
-        setFooter(state, "未解析");
+        state.els.body.appendChild(state.parserView.root);
+        setFooter(state, "等待解析");
         return [state.els.body];
       }
     );
@@ -2053,6 +2153,11 @@ async function reloadPanelInner(state) {
     return;
   }
 
+  if (state.parserView) {
+    updateActiveParserState(state, "preparing", "正在加载正文内容…");
+  } else {
+    setParserShellState(state);
+  }
   let blocks = await loadBlocks(dir, manifest, {
     hideNonBody: config.reading.betterReading
   });
@@ -2073,7 +2178,13 @@ async function reloadPanelInner(state) {
   state.eligibleIds = eligibleTranslationIds(blocks, config.translation);
 
   const imageCount = blocks.filter((block) => block.imagePath).length;
-  if (imageCount) setFooter(state, `加载图片… 0/${imageCount}`);
+  if (imageCount) {
+    if (state.parserView) {
+      updateActiveParserState(state, "preparing", `正在准备正文图片… 0/${imageCount}`);
+    } else {
+      setFooter(state, `加载图片… 0/${imageCount}`);
+    }
+  }
   const imageResult = await prepareImageSources(state, blocks);
   renderToc(state);
   await renderBlocks(state);
@@ -2231,6 +2342,8 @@ function attachPanelEvents(state) {
       retranslateBlock(state, block);
     } else if (action === "reparse") {
       reparseBlock(state, block);
+    } else if (action === "reparse-translate") {
+      reparseBlock(state, block, { translateAfter: true });
     } else if (action === "edit") {
       editBlockContent(state, block);
     } else if (action === "locate") {
@@ -2449,6 +2562,8 @@ async function togglePanel(reader) {
     translatingIds: new Set(),
     sourceRetranslateTimer: null,
     autoParseOnOpen: true,
+    parserView: null,
+    parserPhase: null,
     selectedBlockId: null,
     contextBlockId: null,
     pdfContextBindTimer: null,
