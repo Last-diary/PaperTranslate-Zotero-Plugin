@@ -69,7 +69,7 @@ Zotero → 设置 → PaperTranslate：
 - **大模型 API**：可选择 DeepSeek 或 OpenAI-compatible，切换后显示并分别保存对应的 API Key、Base URL 和模型。兼容模式可连接 OpenAI、OpenRouter、硅基流动、本地模型网关等 `/chat/completions` 端点。“允许思考”属于 DeepSeek 专属能力，选择通用兼容接口时不会显示或发送。
 - **MinerU**：必填 API Token（[申请地址](https://mineru.net/apiManage/token)），解析 PDF 前必须配置；可按需调整模型版本、语言、OCR、公式/表格识别。
 - **目录增强**：使用当前配置的大模型修复标题层级，结果带缓存。
-- **数据**：显示 PaperTranslate 本地缓存的当前占用空间和论文数；可单独清除全部翻译缓存，或清除全部解析产物与翻译缓存。操作前会再次确认，不会删除 Zotero 条目或原始 PDF。
+- **数据**：显示 PaperTranslate 本地缓存目录、当前占用空间和论文数，可直接打开缓存目录；也可单独清除全部翻译缓存，或清除全部解析产物与翻译缓存。清除前会再次确认，不会删除 Zotero 条目或原始 PDF。
 
 两个「测试」按钮可验证 API 连通性。
 

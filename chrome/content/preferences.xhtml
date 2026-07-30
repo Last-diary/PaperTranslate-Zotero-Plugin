@@ -246,21 +246,34 @@
             aria-describedby="papertranslate-preferences-data-description">
     <label><html:h2 id="papertranslate-preferences-data-title">数据</html:h2></label>
     <hbox align="center">
+      <label value="数据存储位置："
+             control="papertranslate-data-directory-path"/>
+      <html:input id="papertranslate-data-directory-path"
+                  type="text"
+                  readonly="true"
+                  class="directory-path"
+                  style="flex:1; min-width:0;"/>
+      <button id="papertranslate-open-data-directory"
+              label="打开文件夹"/>
+    </hbox>
+    <hbox align="center">
       <label value="当前占用空间："
              control="papertranslate-storage-usage"/>
       <label id="papertranslate-storage-usage">计算中…</label>
       <button id="papertranslate-refresh-storage-usage"
               label="重新计算"/>
     </hbox>
-    <label id="papertranslate-preferences-data-description">
-      只清除 PaperTranslate 的本地缓存，不会删除 Zotero 条目或原始 PDF。
-    </label>
-    <hbox>
+    <hbox align="center">
+      <label value="清除缓存："/>
       <button id="papertranslate-clear-translations"
               label="清除所有翻译缓存"/>
       <button id="papertranslate-clear-all-data"
               label="清除所有解析和翻译缓存"/>
     </hbox>
+    <label id="papertranslate-preferences-data-description"
+           style="font-size: smaller;">
+      只清除 PaperTranslate 的本地缓存，不会删除 Zotero 条目或原始 PDF。
+    </label>
     <label id="papertranslate-clear-data-status"/>
   </groupbox>
 

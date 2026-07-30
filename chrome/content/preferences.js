@@ -8,6 +8,8 @@ var PaperTranslate_Preferences = (function () {
   let clearAllTranslationCaches = null;
   let clearAllPaperTranslateData = null;
   let getPaperTranslateStorageUsage = null;
+  let openPaperTranslateDataDirectory = null;
+  let getPaperTranslateDataDirectory = null;
   let selectedLlmProvider = null;
   try {
     ({ getConfig } = ChromeUtils.importESModule("chrome://papertranslate/content/modules/config.mjs"));
@@ -16,7 +18,9 @@ var PaperTranslate_Preferences = (function () {
     ({
       clearAllTranslationCaches,
       clearAllPaperTranslateData,
-      getPaperTranslateStorageUsage
+      getPaperTranslateStorageUsage,
+      openPaperTranslateDataDirectory,
+      rootDir: getPaperTranslateDataDirectory
     } = ChromeUtils.importESModule("chrome://papertranslate/content/modules/storage.mjs"));
   } catch (error) {
     Cu.reportError(error);
@@ -162,8 +166,27 @@ var PaperTranslate_Preferences = (function () {
     const allDataButton = document.getElementById("papertranslate-clear-all-data");
     const usage = document.getElementById("papertranslate-storage-usage");
     const refreshButton = document.getElementById("papertranslate-refresh-storage-usage");
+    const openButton = document.getElementById("papertranslate-open-data-directory");
+    const dataDirectoryPath = document.getElementById("papertranslate-data-directory-path");
     const status = document.getElementById("papertranslate-clear-data-status");
-    if (!translationsButton || !allDataButton || !usage || !refreshButton || !status) return;
+    if (
+      !translationsButton
+      || !allDataButton
+      || !usage
+      || !refreshButton
+      || !openButton
+      || !dataDirectoryPath
+      || !status
+    ) return;
+
+    try {
+      const path = getPaperTranslateDataDirectory?.() || "";
+      dataDirectoryPath.value = path || "无法确定";
+      dataDirectoryPath.title = path;
+    } catch (error) {
+      dataDirectoryPath.value = "无法确定";
+      Cu.reportError(error);
+    }
 
     const setStatus = (text, state = "") => {
       status.textContent = text;
@@ -193,6 +216,7 @@ var PaperTranslate_Preferences = (function () {
     const run = async (action, successMessage) => {
       translationsButton.disabled = true;
       allDataButton.disabled = true;
+      openButton.disabled = true;
       setStatus("清除中…");
       try {
         const result = await action();
@@ -203,11 +227,38 @@ var PaperTranslate_Preferences = (function () {
       } finally {
         translationsButton.disabled = false;
         allDataButton.disabled = false;
+        openButton.disabled = false;
       }
     };
 
     refreshButton.addEventListener("click", () => {
       void refreshUsage();
+    });
+    openButton.addEventListener("click", () => {
+      if (!openPaperTranslateDataDirectory) {
+        setStatus("存储模块加载失败，请重启 Zotero 后重试。", "error");
+        return;
+      }
+      openButton.disabled = true;
+      setStatus("正在打开目录…");
+      void openPaperTranslateDataDirectory()
+        .then((openedExactDirectory) => {
+          if (openedExactDirectory) {
+            setStatus("");
+            return;
+          }
+          setStatus(
+            "当前 Zotero 版本无法直接打开子目录，已打开 Zotero 数据目录。",
+            "success"
+          );
+        })
+        .catch((error) => {
+          Cu.reportError(error);
+          setStatus(error.message || String(error), "error");
+        })
+        .finally(() => {
+          openButton.disabled = false;
+        });
     });
     translationsButton.addEventListener("click", () => {
       if (!clearAllTranslationCaches) {

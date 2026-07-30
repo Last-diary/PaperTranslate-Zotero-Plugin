@@ -12,6 +12,28 @@ export function rootDir() {
   return PathUtils.join(ctx.Zotero.DataDirectory.dir, "papertranslate");
 }
 
+export async function openPaperTranslateDataDirectory() {
+  const root = checkedRootDir();
+  await ensureDir(root);
+
+  // Zotero 的 PreferencePanes API 没有提供打开插件子目录的方法。官方设置页用
+  // DataDirectory.reveal() 打开数据根目录；Zotero.File.reveal(path) 是官方源码中
+  // 用于任意路径的内部入口，因此把访问集中在这里并做能力检测与安全降级。
+  if (typeof ctx.Zotero?.File?.reveal === "function") {
+    ctx.Zotero.debug?.(`PaperTranslate storage: revealing ${root}`);
+    await ctx.Zotero.File.reveal(root);
+    return true;
+  }
+  if (typeof ctx.Zotero?.DataDirectory?.reveal === "function") {
+    ctx.Zotero.debug?.(
+      "PaperTranslate storage: Zotero.File.reveal unavailable; revealing Zotero data directory"
+    );
+    await ctx.Zotero.DataDirectory.reveal();
+    return false;
+  }
+  throw new Error("当前 Zotero 版本不支持打开数据目录。");
+}
+
 export function itemDir(item) {
   return itemDirForKey(item?.key);
 }
