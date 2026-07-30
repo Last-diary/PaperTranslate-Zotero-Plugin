@@ -11,7 +11,7 @@
 
 兼容 **Zotero 7 / 8 / 9**。
 
-## 当前开发版本（基于 0.4.9 RC1，Manifest 0.4.8.1）
+## 当前版本：0.5.0
 
 - Reader 内容渲染迁移到 **Marked 18 + DOMPurify 3.4.12**，支持 GFM、围栏代码、
   Markdown 表格和经过白名单净化的链接、表格与公式输出。
@@ -54,9 +54,12 @@ Zotero → 设置 → PaperTranslate：
 
 - **阅读**：配置正文对齐方式、字号，以及是否隐藏页眉、页脚、页码、脚注等非正文信息。
 - **翻译**：默认跳过作者名单、引用章节、补充材料，可在此开启翻译。
-- **大模型 API**：可选择 DeepSeek 或 OpenAI-compatible，切换后显示并分别保存对应的 API Key、Base URL 和模型。兼容模式可连接 OpenAI、OpenRouter、硅基流动、本地模型网关等 `/chat/completions` 端点。“允许思考”属于 DeepSeek 专属能力，选择通用兼容接口时不会显示或发送。
+- **大模型 API**：可选择 DeepSeek 或 OpenAI-compatible。DeepSeek API Key 可在
+  [DeepSeek 开放平台](https://platform.deepseek.com/)申请，推荐使用 **DeepSeek V4 Flash**
+  的无思考模式，以兼顾翻译速度、成本和稳定性。切换服务后会显示并分别保存对应的
+  API Key、Base URL 和模型；兼容模式可连接 OpenAI、OpenRouter、硅基流动、本地模型网关等
+  `/chat/completions` 端点。“允许思考”属于 DeepSeek 专属能力，选择通用兼容接口时不会显示或发送。
 - **MinerU**：必填 API Token（[申请地址](https://mineru.net/apiManage/token)），解析 PDF 前必须配置；可按需调整模型版本、语言、OCR、公式/表格识别。
-- **目录增强**：使用当前配置的大模型修复标题层级，结果带缓存。
 - **数据**：显示 PaperTranslate 本地缓存目录、当前占用空间和论文数，可直接打开缓存目录；也可单独清除全部翻译缓存，或清除全部解析产物与翻译缓存。清除前会再次确认，不会删除 Zotero 条目或原始 PDF。
 
 两个「测试」按钮可验证 API 连通性。
