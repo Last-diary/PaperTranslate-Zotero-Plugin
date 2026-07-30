@@ -21,6 +21,15 @@ test("reparse scope matches editable text-like blocks and skips structured block
   assert.equal(canReparseBlock(locatedBlock("image")), false);
   assert.equal(canReparseBlock(locatedBlock("chart")), false);
   assert.equal(canReparseBlock({ type: "text" }), false);
+  assert.equal(canReparseBlock({
+    ...locatedBlock("text"),
+    regionsReliable: false,
+    regions: [{
+      pageIdx: 0,
+      bbox: [10, 20, 30, 40],
+      pageSize: [1000, 1000]
+    }]
+  }), false);
 });
 
 test("reparse result joins MinerU text blocks as one editable source string", () => {

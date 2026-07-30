@@ -127,6 +127,9 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
   const contentList = names.includes("content_list.json")
     ? "content_list.json"
     : names.find((name) => name.endsWith("_content_list.json")) || "";
+  const layout = names.includes("layout.json")
+    ? "layout.json"
+    : names.find((name) => name.endsWith("_middle.json")) || "";
   const displayPdf = names.find((name) => name.endsWith("_origin.pdf"))
     || names.find((name) => name.toLowerCase().endsWith(".pdf") && name !== SOURCE_PDF_NAME)
     || "";
@@ -148,7 +151,7 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
   }
 
   const manifest = {
-    version: 2,
+    version: 3,
     attachmentKey: item.key,
     attachmentLibraryID: item.libraryID,
     // MinerU 偶尔会把首页版权或授权声明误标为 title。Zotero 条目标题
@@ -165,6 +168,7 @@ export async function importAttachment(item, { onProgress = () => {} } = {}) {
     createdAt: new Date().toISOString(),
     files: {
       contentList,
+      layout,
       displayPdf,
       sourcePdf: SOURCE_PDF_NAME
     },

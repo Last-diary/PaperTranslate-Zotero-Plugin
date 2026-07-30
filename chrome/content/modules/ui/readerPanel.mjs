@@ -9,6 +9,10 @@ import { ctx } from "../context.mjs";
 import { getConfig } from "../config.mjs";
 import * as storage from "../storage.mjs";
 import { loadBlocks, tocItems } from "../blocks.mjs";
+import {
+  matchBlockRegionAtPoint,
+  regionsForBlock
+} from "../blockRegions.mjs";
 import { reparseBlockImage } from "../blockReparse.mjs";
 import { TranslationService, eligibleTranslationIds } from "../deepseek.mjs";
 import { TocEnhancer } from "../toc.mjs";
@@ -25,7 +29,10 @@ import { normalizeCodeBlock } from "./codeBlock.mjs";
 import { normalizeInlineMathSpacing } from "./markdownMath.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 import { createMathJaxController } from "./mathJax.mjs";
-import { blockCropViewRect, renderBlockCrop } from "./pdfBlockCrop.mjs";
+import {
+  blockCropViewRect,
+  renderBlockRegionsCrop
+} from "./pdfBlockCrop.mjs";
 
 const PANEL_ID = "papertranslate-panel";
 const RESIZER_ID = "papertranslate-resizer";
@@ -1055,10 +1062,12 @@ async function reparseBlock(state, block) {
   syncTranslationMasks(state);
   setFooter(state, "正在截取当前块…");
   ctx.Zotero.debug?.(
-    `PaperTranslate block-reparse-v1: start block=${block.id} type=${block.type} page=${block.pageIdx}`
+    `PaperTranslate block-reparse-regions-v2: start block=${block.id} type=${block.type} regions=${regionsForBlock(block).length}`
   );
   try {
-    const image = await renderBlockCrop(state.reader, block);
+    const image = await renderBlockRegionsCrop(state.reader, block, {
+      doc: state.doc
+    });
     const replacement = await reparseBlockImage({
       attachment: state.attachment,
       block,
@@ -1419,42 +1428,7 @@ function bindPdfContextBridge(state, attempt = 0) {
 }
 
 function blockAtPdfPoint(state, point) {
-  if (!point) return null;
-  const candidates = state.blocks.filter((block) => Number(block.pageIdx) === point.pageIdx);
-  if (!candidates.length) return null;
-
-  let best = null;
-  for (const block of candidates) {
-    const bbox = Array.isArray(block.bbox) ? block.bbox.map(Number) : [];
-    const pageSize = Array.isArray(block.pageSize) ? block.pageSize.map(Number) : [];
-    const [x1, y1, x2, y2] = bbox;
-    const [pageWidth, pageHeight] = pageSize;
-    const valid = [x1, y1, x2, y2, pageWidth, pageHeight].every(Number.isFinite)
-      && pageWidth > 0
-      && pageHeight > 0
-      && x2 > x1
-      && y2 > y1;
-    if (!valid) continue;
-
-    const left = Math.max(0, Math.min(1, x1 / pageWidth));
-    const top = Math.max(0, Math.min(1, y1 / pageHeight));
-    const right = Math.max(left, Math.min(1, x2 / pageWidth));
-    const bottom = Math.max(top, Math.min(1, y2 / pageHeight));
-    const inside = point.xRatio >= left
-      && point.xRatio <= right
-      && point.yRatio >= top
-      && point.yRatio <= bottom;
-    const dx = point.xRatio < left
-      ? left - point.xRatio
-      : point.xRatio > right ? point.xRatio - right : 0;
-    const dy = point.yRatio < top
-      ? top - point.yRatio
-      : point.yRatio > bottom ? point.yRatio - bottom : 0;
-    const area = Math.max(0.000001, (right - left) * (bottom - top));
-    const score = inside ? -1 / area : dx * dx + dy * dy;
-    if (!best || score < best.score) best = { block, score };
-  }
-  return best?.block || candidates[0];
+  return matchBlockRegionAtPoint(state.blocks, point);
 }
 
 function clearPdfLocatorHighlight(state) {
@@ -1466,8 +1440,8 @@ function clearPdfLocatorHighlight(state) {
     state.win.clearTimeout(state.pdfCenterTimer);
     state.pdfCenterTimer = null;
   }
-  state.pdfHighlightNode?.remove();
-  state.pdfHighlightNode = null;
+  for (const node of state.pdfHighlightNodes || []) node?.remove();
+  state.pdfHighlightNodes = [];
 }
 
 function ensurePdfLocatorStyle(doc) {
@@ -1503,17 +1477,42 @@ function centerPdfHighlight(doc, highlight) {
   container.scrollTop = targetTop;
 }
 
-function showPdfBlockHighlight(state, block, attempt = 0) {
+function regionKey(region) {
+  return region
+    ? `${region.pageIdx}:${region.bbox?.join(",") || ""}`
+    : "";
+}
+
+function preferredRegionForBlock(state, block, preferredRegion = null) {
+  const regions = regionsForBlock(block);
+  if (!regions.length) return null;
+  const preferredKey = regionKey(preferredRegion);
+  const selectedKey = state.selectedRegion?.blockId === block.id
+    ? regionKey(state.selectedRegion.region)
+    : "";
+  return regions.find((region) => regionKey(region) === preferredKey)
+    || regions.find((region) => regionKey(region) === selectedKey)
+    || regions.find((region) => Number(region.pageIdx) === state.pdfContextPoint?.pageIdx)
+    || regions[0];
+}
+
+function showPdfBlockHighlight(state, block, preferredRegion = null, attempt = 0) {
   if (state.disposed || !block) return;
+  // Zotero 的公开 reader.navigate() 只负责导航，没有任意多区域的临时
+  // 高亮接口。继续把 PDF viewer DOM 兼容访问集中在本函数和
+  // pdfViewerDocument() 中，所有节点都由 clearPdfLocatorHighlight()
+  // 清理；结构不匹配时仅安全降级为不显示高亮。
   const doc = pdfViewerDocument(state);
-  const pageNumber = Math.max(1, Number(block.pageIdx) + 1 || 1);
+  const targetRegion = preferredRegionForBlock(state, block, preferredRegion);
+  if (!targetRegion) return;
+  const pageNumber = Math.max(1, Number(targetRegion.pageIdx) + 1 || 1);
   const page = doc?.querySelector(
     `.page[data-page-number="${pageNumber}"], .page[data-page-index="${pageNumber - 1}"]`
   );
   if (!doc || !page) {
     if (attempt < 12) {
       state.pdfHighlightAttemptTimer = state.win.setTimeout(
-        () => showPdfBlockHighlight(state, block, attempt + 1),
+        () => showPdfBlockHighlight(state, block, targetRegion, attempt + 1),
         80 + attempt * 35
       );
     }
@@ -1524,44 +1523,55 @@ function showPdfBlockHighlight(state, block, attempt = 0) {
   clearPdfLocatorHighlight(state);
   ensurePdfLocatorStyle(doc);
 
-  const highlight = doc.createElement("div");
-  highlight.className = "pt-pdf-locator-highlight";
-  highlight.setAttribute("aria-hidden", "true");
-
-  const ratioRect = blockCropViewRect(block, 0);
-  if (ratioRect) {
-    const [leftRatio, topRatio, rightRatio, bottomRatio] = ratioRect;
-    const left = leftRatio * 100;
-    const top = topRatio * 100;
-    const right = rightRatio * 100;
-    const bottom = bottomRatio * 100;
-    highlight.style.left = `${Math.max(0, left - 0.35)}%`;
-    highlight.style.top = `${Math.max(0, top - 0.25)}%`;
-    highlight.style.width = `${Math.max(1.2, Math.min(100 - left, right - left + 0.7))}%`;
-    highlight.style.height = `${Math.max(1, Math.min(100 - top, bottom - top + 0.5))}%`;
-  } else {
-    highlight.style.inset = "8px";
-    highlight.style.background = "rgba(96,165,250,.04)";
+  const pageRegions = regionsForBlock(block)
+    .filter((region) => Number(region.pageIdx) === Number(targetRegion.pageIdx));
+  const highlights = [];
+  let targetHighlight = null;
+  for (const region of pageRegions) {
+    const highlight = doc.createElement("div");
+    highlight.className = "pt-pdf-locator-highlight";
+    highlight.setAttribute("aria-hidden", "true");
+    const ratioRect = blockCropViewRect(region, 0);
+    if (ratioRect) {
+      const [leftRatio, topRatio, rightRatio, bottomRatio] = ratioRect;
+      const left = leftRatio * 100;
+      const top = topRatio * 100;
+      const right = rightRatio * 100;
+      const bottom = bottomRatio * 100;
+      highlight.style.left = `${Math.max(0, left - 0.35)}%`;
+      highlight.style.top = `${Math.max(0, top - 0.25)}%`;
+      highlight.style.width = `${Math.max(1.2, Math.min(100 - left, right - left + 0.7))}%`;
+      highlight.style.height = `${Math.max(1, Math.min(100 - top, bottom - top + 0.5))}%`;
+    } else {
+      highlight.style.inset = "8px";
+      highlight.style.background = "rgba(96,165,250,.04)";
+    }
+    page.appendChild(highlight);
+    highlights.push(highlight);
+    if (regionKey(region) === regionKey(targetRegion)) targetHighlight = highlight;
   }
-
-  page.appendChild(highlight);
-  state.pdfHighlightNode = highlight;
-  centerPdfHighlight(doc, highlight);
+  state.pdfHighlightNodes = highlights;
+  targetHighlight ||= highlights[0];
+  if (!targetHighlight) return;
+  centerPdfHighlight(doc, targetHighlight);
   // 原生 Reader 的页面导航可能在高亮插入后继续调整滚动位置，
   // 稍后再校正一次，确保目标段落最终位于视口中间。
   state.pdfCenterTimer = state.win.setTimeout(() => {
     state.pdfCenterTimer = null;
-    centerPdfHighlight(doc, highlight);
+    centerPdfHighlight(doc, targetHighlight);
   }, 180);
 }
 
-function navigateToBlock(state, block) {
+function navigateToBlock(state, block, preferredRegion = null) {
   if (!block) return;
+  const targetRegion = preferredRegionForBlock(state, block, preferredRegion);
+  if (!targetRegion) return;
+  state.selectedRegion = { blockId: block.id, region: targetRegion };
   selectBlockInPanel(state, block);
   clearPdfLocatorHighlight(state);
-  navigateToPage(state, block.pageIdx);
+  navigateToPage(state, targetRegion.pageIdx);
   state.pdfHighlightAttemptTimer = state.win.setTimeout(
-    () => showPdfBlockHighlight(state, block),
+    () => showPdfBlockHighlight(state, block, targetRegion),
     60
   );
 }
@@ -1640,16 +1650,19 @@ function restoreBlockScrollAnchor(state, anchor) {
   container.scrollTop = Math.max(0, container.scrollTop + currentOffset - anchor.offset);
 }
 
-function locatePdfContextInPanel(state, block) {
-  if (state.disposed || !block) return;
+function locatePdfContextInPanel(state, match) {
+  if (state.disposed || !match?.block) return;
+  const { block, region } = match;
+  state.selectedRegion = { blockId: block.id, region };
   selectBlockInPanel(state, block, { scroll: true });
   clearPdfLocatorHighlight(state);
-  showPdfBlockHighlight(state, block);
+  showPdfBlockHighlight(state, block, region);
 }
 
 function clearLinkedSelection(state) {
-  if (!state.selectedBlockId && !state.pdfHighlightNode) return;
+  if (!state.selectedBlockId && !(state.pdfHighlightNodes || []).length) return;
   state.selectedBlockId = null;
+  state.selectedRegion = null;
   for (const section of state.els.body.querySelectorAll("section.pt-selected")) {
     section.classList.remove("pt-selected");
   }
@@ -2331,12 +2344,12 @@ function appendPdfViewContextCommand(event) {
   // 解析坐标，避免 iframe 重建或原生双视图切换后使用过期的桥接状态。
   const currentPoint = pdfPointFromViewContextEvent(event);
   if (event.params) state.pdfContextPoint = currentPoint;
-  const block = blockAtPdfPoint(state, currentPoint || state.pdfContextPoint);
+  const match = blockAtPdfPoint(state, currentPoint || state.pdfContextPoint);
   event.append({
     label: "在右侧内容中定位",
-    disabled: !block,
+    disabled: !match,
     onCommand() {
-      locatePdfContextInPanel(state, block);
+      locatePdfContextInPanel(state, match);
     }
   });
 }
@@ -2426,6 +2439,7 @@ async function togglePanel(reader) {
     sourceRetranslateTimer: null,
     autoParseOnOpen: true,
     selectedBlockId: null,
+    selectedRegion: null,
     contextBlockId: null,
     pdfContextBindTimer: null,
     pdfContextContainer: null,
@@ -2435,7 +2449,7 @@ async function togglePanel(reader) {
     pdfAutoZoomRequestId: 0,
     pdfHighlightAttemptTimer: null,
     pdfCenterTimer: null,
-    pdfHighlightNode: null
+    pdfHighlightNodes: []
   };
   state.mathJax = createMathJaxController(win);
   panelStates.set(win, state);

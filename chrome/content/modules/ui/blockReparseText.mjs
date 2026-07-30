@@ -1,11 +1,18 @@
 const UNSUPPORTED_BLOCK_TYPES = new Set(["table", "image", "chart"]);
 
 export function canReparseBlock(block) {
+  const regions = Array.isArray(block?.regions) ? block.regions : [];
   return Boolean(
     block
     && !UNSUPPORTED_BLOCK_TYPES.has(block.type)
+    && block.regionsReliable !== false
     && Array.isArray(block.bbox)
     && Array.isArray(block.pageSize)
+    && (!regions.length || regions.every((region) => (
+      Array.isArray(region?.bbox)
+      && Array.isArray(region?.pageSize)
+      && Number.isInteger(Number(region?.pageIdx))
+    )))
   );
 }
 

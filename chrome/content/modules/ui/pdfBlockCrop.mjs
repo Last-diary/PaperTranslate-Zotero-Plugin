@@ -1,8 +1,13 @@
+import { regionsForBlock } from "../blockRegions.mjs";
 import { ctx } from "../context.mjs";
 
 const DEFAULT_PADDING_RATIO = 0.015;
 const RENDER_SCALE = 4;
-const IMPLEMENTATION_MARKER = "block-reparse-crop-v1";
+const MAX_COMPOSITE_REGIONS = 16;
+const MAX_COMPOSITE_DIMENSION = 16384;
+const MAX_COMPOSITE_PIXELS = 32_000_000;
+const COMPOSITE_GAP = 24;
+const IMPLEMENTATION_MARKER = "block-reparse-regions-v2";
 
 function finiteRect(values) {
   return Array.isArray(values)
@@ -74,6 +79,78 @@ export function ratioRectToCanvasRect(ratioRect, canvasWidth, canvasHeight) {
   const width = rightPixel - x;
   const height = bottomPixel - y;
   return width > 0 && height > 0 ? [x, y, width, height] : null;
+}
+
+function loadCropImage(doc, dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = doc.createElement("img");
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener(
+      "error",
+      () => reject(new Error("无法合并当前段落的 PDF 区域截图。")),
+      { once: true }
+    );
+    image.src = dataUrl;
+  });
+}
+
+export function compositeCanvasSize(
+  imageSizes,
+  {
+    gap = COMPOSITE_GAP,
+    maxDimension = MAX_COMPOSITE_DIMENSION,
+    maxPixels = MAX_COMPOSITE_PIXELS
+  } = {}
+) {
+  const sizes = (Array.isArray(imageSizes) ? imageSizes : [])
+    .map((size) => Array.isArray(size) ? size.map(Number) : [])
+    .filter((size) => size.length === 2 && size.every(Number.isFinite) && size[0] > 0 && size[1] > 0);
+  if (!sizes.length) return null;
+
+  const rawWidth = Math.max(...sizes.map(([width]) => width));
+  const rawHeight = sizes.reduce((total, [, height]) => total + height, 0)
+    + Math.max(0, sizes.length - 1) * Math.max(0, Number(gap) || 0);
+  const scale = Math.min(
+    1,
+    Number(maxDimension) / rawWidth,
+    Number(maxDimension) / rawHeight,
+    Math.sqrt(Number(maxPixels) / (rawWidth * rawHeight))
+  );
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  return {
+    width: Math.max(1, Math.floor(rawWidth * scale)),
+    height: Math.max(1, Math.floor(rawHeight * scale)),
+    scale,
+    gap: Math.max(0, Number(gap) || 0)
+  };
+}
+
+async function composeCropImages(doc, dataUrls) {
+  const images = await Promise.all(dataUrls.map((dataUrl) => loadCropImage(doc, dataUrl)));
+  const size = compositeCanvasSize(
+    images.map((image) => [image.naturalWidth, image.naturalHeight])
+  );
+  if (!size) throw new Error("当前段落的 PDF 区域截图尺寸无效。");
+
+  const canvas = doc.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("无法创建多区域段落截图。");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  let y = 0;
+  for (const image of images) {
+    const width = Math.max(1, Math.round(image.naturalWidth * size.scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * size.scale));
+    context.drawImage(image, 0, y, width, height);
+    y += height + Math.round(size.gap * size.scale);
+  }
+  const dataUrl = canvas.toDataURL("image/png");
+  canvas.width = 0;
+  canvas.height = 0;
+  return dataUrl;
 }
 
 function cloneIntoReader(value, readerWindow) {
@@ -354,4 +431,35 @@ export async function renderBlockCrop(reader, block, { paddingRatio } = {}) {
   }
   debug("using direct PDF.js page render fallback");
   return renderWithPdfJs(page, pdfView, pdfRect);
+}
+
+export async function renderBlockRegionsCrop(
+  reader,
+  block,
+  {
+    paddingRatio,
+    doc
+  } = {}
+) {
+  const regions = regionsForBlock(block);
+  if (!regions.length) {
+    throw new Error("当前块没有可用的 PDF 定位范围。");
+  }
+  if (block?.regionsReliable === false && regions.length > 1) {
+    throw new Error("当前段落的多区域定位信息不完整，无法安全重新解析。");
+  }
+  if (regions.length > MAX_COMPOSITE_REGIONS) {
+    throw new Error(`当前段落包含 ${regions.length} 个 PDF 区域，超出重新解析上限。`);
+  }
+
+  const crops = [];
+  for (const region of regions) {
+    crops.push(await renderBlockCrop(reader, region, { paddingRatio }));
+  }
+  if (crops.length === 1) return crops[0];
+  if (!doc?.createElement) {
+    throw new Error("当前 Reader 无法合并多区域段落截图。");
+  }
+  debug(`composing ${crops.length} located PDF regions`);
+  return composeCropImages(doc, crops);
 }

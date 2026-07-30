@@ -3,10 +3,29 @@ import assert from "node:assert/strict";
 
 import {
   blockCropViewRect,
+  compositeCanvasSize,
   ratioRectToCanvasRect,
   resolvePdfPageContext,
   viewRatioRectToPdfRect
 } from "../chrome/content/modules/ui/pdfBlockCrop.mjs";
+
+test("multiple crop images keep reading order in a bounded vertical canvas", () => {
+  assert.deepEqual(
+    compositeCanvasSize([[100, 200], [80, 100]]),
+    {
+      width: 100,
+      height: 324,
+      scale: 1,
+      gap: 24
+    }
+  );
+  const bounded = compositeCanvasSize(
+    [[100, 200], [80, 100]],
+    { maxDimension: 200, maxPixels: 1_000_000 }
+  );
+  assert.equal(bounded.height, 200);
+  assert.ok(bounded.width > 0 && bounded.width < 100);
+});
 
 test("block crop rect is normalized, padded, and clamped", () => {
   assert.deepEqual(

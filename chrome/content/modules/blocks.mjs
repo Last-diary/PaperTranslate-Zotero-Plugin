@@ -3,6 +3,10 @@
 
 import { fnv1a64Hex } from "./utils.mjs";
 import { readJson } from "./storage.mjs";
+import {
+  loadContentRegionEntries,
+  regionsForBlock
+} from "./blockRegions.mjs";
 
 const NON_BODY_BLOCK_TYPES = new Set([
   "aside_text",
@@ -96,6 +100,8 @@ export function normalizeBlock(
     pageIdx: Number(block.page_idx || 0),
     bbox: block.bbox || null,
     pageSize: resolvedPageSize,
+    regions: Array.isArray(block.regions) ? block.regions : [],
+    regionsReliable: block.regions_reliable !== false,
     imagePath,
     captions,
     tableBody: block.table_body || "",
@@ -119,11 +125,31 @@ export async function loadBlocks(dir, manifest = null, { hideNonBody = true } = 
   if (contentFile) {
     const data = await readJson(PathUtils.join(dir, contentFile), []);
     if (!Array.isArray(data)) return [];
+    const regionEntries = await loadContentRegionEntries(
+      dir,
+      manifest,
+      contentFile,
+      data
+    );
     return data
-      .map((block, index) => normalizeBlock({
-        ...block,
-        block_position: `${block.page_idx || 0}-${index}`
-      }, index, [1000, 1000], { hideNonBody }))
+      .map((block, index) => {
+        const regionEntry = regionEntries?.[index];
+        const normalized = normalizeBlock({
+          ...block,
+          block_position: `${block.page_idx || 0}-${index}`,
+          regions: regionEntry?.regions,
+          regions_reliable: regionEntry?.reliable
+        }, index, [1000, 1000], { hideNonBody });
+        if (!normalized) return null;
+        const regions = regionsForBlock(normalized);
+        return {
+          ...normalized,
+          regions,
+          pageIdx: regions[0]?.pageIdx ?? normalized.pageIdx,
+          bbox: regions[0]?.bbox ?? normalized.bbox,
+          pageSize: regions[0]?.pageSize ?? normalized.pageSize
+        };
+      })
       .filter(Boolean);
   }
 

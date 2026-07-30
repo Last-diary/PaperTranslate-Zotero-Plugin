@@ -4,6 +4,7 @@
 //   .papertranslate-translations.zh.json     DeepSeek 译文缓存
 //   .papertranslate-source-overrides.json    用户编辑的原文覆盖与待重译块
 //   .papertranslate-toc-enhancement.json     目录增强缓存
+//   .papertranslate-block-regions.json       MinerU 逻辑块到 PDF 区域的映射缓存
 //   content_list.json / images/ / source.pdf MinerU 解析产物与原 PDF
 
 import { ctx } from "./context.mjs";
@@ -65,6 +66,10 @@ export function sourceOverridesPath(dir) {
 
 export function tocEnhancementPath(dir) {
   return PathUtils.join(dir, ".papertranslate-toc-enhancement.json");
+}
+
+export function blockRegionsPath(dir) {
+  return PathUtils.join(dir, ".papertranslate-block-regions.json");
 }
 
 export async function ensureDir(dir) {
