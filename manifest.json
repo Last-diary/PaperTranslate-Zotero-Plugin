@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "PaperTranslate",
-  "version": "0.4.8",
+  "version": "0.4.8.1",
   "description": "MinerU 解析 + 大模型翻译：在 Zotero Reader 中为 PDF 提供重排译文面板。",
   "author": "PaperTranslate",
   "icons": {
