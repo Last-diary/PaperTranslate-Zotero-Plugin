@@ -9,6 +9,7 @@ import { ctx } from "../context.mjs";
 import { getConfig } from "../config.mjs";
 import * as storage from "../storage.mjs";
 import { loadBlocks, tocItems } from "../blocks.mjs";
+import { reparseBlockImage } from "../blockReparse.mjs";
 import { TranslationService, eligibleTranslationIds } from "../deepseek.mjs";
 import { TocEnhancer } from "../toc.mjs";
 import { escapeHtml } from "../utils.mjs";
@@ -19,10 +20,12 @@ import {
   setBlockSourceText,
   shouldEditSource
 } from "./blockEditing.mjs";
+import { canReparseBlock } from "./blockReparseText.mjs";
 import { normalizeCodeBlock } from "./codeBlock.mjs";
 import { normalizeInlineMathSpacing } from "./markdownMath.mjs";
 import { createPanelRenderer, safeBlockTypeClass } from "./panelRenderer.mjs";
 import { createMathJaxController } from "./mathJax.mjs";
+import { blockCropViewRect, renderBlockCrop } from "./pdfBlockCrop.mjs";
 
 const PANEL_ID = "papertranslate-panel";
 const RESIZER_ID = "papertranslate-resizer";
@@ -420,6 +423,10 @@ function populateBlockContextMenu(state) {
     addCommand("copy-original", "复制原文");
     addSeparator();
     addCommand("edit", "编辑内容");
+    const block = state.blockById.get(state.contextBlockId);
+    if (canReparseBlock(block)) {
+      addCommand("reparse", "重新解析");
+    }
     addSeparator();
     addCommand("locate", "在 PDF 中定位");
   } else {
@@ -992,6 +999,105 @@ async function retranslateBlock(state, block) {
   }
 }
 
+async function saveOriginalBlockText(state, block, value) {
+  const nextOverrides = { ...state.sourceOverrides, [block.id]: value };
+  const nextPendingIds = new Set(state.pendingSourceTranslationIds);
+  const nextTranslations = { ...state.translations };
+  const needsTranslation = state.eligibleIds.has(block.id);
+  if (needsTranslation) {
+    nextPendingIds.add(block.id);
+    delete nextTranslations[block.id];
+  }
+
+  // 原文覆盖独立保存，不修改 MinerU 解析产物。先让旧译文失效，
+  // 再写入覆盖与待重译标记，避免重新打开面板时展示过期译文。
+  await storage.writeJson(storage.translationsPath(state.dir), nextTranslations);
+  try {
+    await storage.writeJson(
+      storage.sourceOverridesPath(state.dir),
+      sourceOverridePayload(state, nextOverrides, nextPendingIds)
+    );
+  } catch (error) {
+    await storage.writeJson(storage.translationsPath(state.dir), state.translations).catch(() => {});
+    throw error;
+  }
+
+  state.sourceOverrides = nextOverrides;
+  state.pendingSourceTranslationIds = nextPendingIds;
+  state.translations = nextTranslations;
+  setBlockSourceText(block, value);
+  state.eligibleIds = eligibleTranslationIds(state.blocks, getConfig().translation);
+  renderToc(state);
+  await refreshBlockSection(state, block);
+  updateTranslationStatus(state);
+  return { needsTranslation };
+}
+
+async function dataUrlBytes(dataUrl) {
+  const response = await fetch(dataUrl);
+  if (!response.ok) throw new Error("无法读取当前块截图。");
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function reparseBlock(state, block) {
+  if (!canReparseBlock(block)) {
+    setFooter(state, "当前块类型暂不支持重新解析。");
+    return;
+  }
+  if (state.translationBusy || state.translatingIds.has(block.id)) {
+    setFooter(state, "已有任务正在进行，请稍后重试。");
+    return;
+  }
+
+  state.translationBusy = true;
+  state.els.translateBtn.disabled = true;
+  state.translatingIds.add(block.id);
+  syncTranslationMasks(state);
+  setFooter(state, "正在截取当前块…");
+  ctx.Zotero.debug?.(
+    `PaperTranslate block-reparse-v1: start block=${block.id} type=${block.type} page=${block.pageIdx}`
+  );
+  try {
+    const image = await renderBlockCrop(state.reader, block);
+    const replacement = await reparseBlockImage({
+      attachment: state.attachment,
+      block,
+      pngBytes: await dataUrlBytes(image),
+      onProgress: (text) => {
+        if (!state.disposed) setFooter(state, text);
+      },
+      shouldAbort: () => state.disposed
+    });
+    if (state.disposed) return;
+    if (!ctx.Zotero.Items.exists(state.attachment.id)) {
+      throw new Error("PDF 附件已删除，无法保存重新解析结果。");
+    }
+    if (replacement === blockSourceText(block)) {
+      setFooter(state, "重新解析完成，内容没有变化。");
+      return;
+    }
+    const { needsTranslation } = await saveOriginalBlockText(state, block, replacement);
+    setFooter(
+      state,
+      needsTranslation
+        ? "当前块已重新解析并替换原文；切换到译文页后将自动重新翻译。"
+        : "当前块已重新解析并替换原文。"
+    );
+  } catch (error) {
+    if (!state.disposed) {
+      setFooter(state, `重新解析失败：${error.message || error}`);
+      ctx.Zotero.logError(error);
+    }
+  } finally {
+    state.translatingIds.delete(block.id);
+    state.translationBusy = false;
+    if (!state.disposed) {
+      syncTranslationMasks(state);
+      state.els.translateBtn.disabled = false;
+    }
+  }
+}
+
 function editBlockContent(state, block) {
   if (state.translationBusy || state.translatingIds.has(block.id)) {
     setFooter(state, "翻译任务正在进行，请稍后再编辑内容。");
@@ -1057,36 +1163,7 @@ function editBlockContent(state, block) {
     cancelButton.disabled = true;
     try {
       if (editingOriginal) {
-        const nextOverrides = { ...state.sourceOverrides, [block.id]: value };
-        const nextPendingIds = new Set(state.pendingSourceTranslationIds);
-        const nextTranslations = { ...state.translations };
-        const needsTranslation = state.eligibleIds.has(block.id);
-        if (needsTranslation) {
-          nextPendingIds.add(block.id);
-          delete nextTranslations[block.id];
-        }
-
-        // 原文覆盖独立保存，不修改 MinerU 解析产物。先让旧译文失效，
-        // 再写入覆盖与待重译标记，避免重新打开面板时展示过期译文。
-        await storage.writeJson(storage.translationsPath(state.dir), nextTranslations);
-        try {
-          await storage.writeJson(
-            storage.sourceOverridesPath(state.dir),
-            sourceOverridePayload(state, nextOverrides, nextPendingIds)
-          );
-        } catch (error) {
-          await storage.writeJson(storage.translationsPath(state.dir), state.translations).catch(() => {});
-          throw error;
-        }
-
-        state.sourceOverrides = nextOverrides;
-        state.pendingSourceTranslationIds = nextPendingIds;
-        state.translations = nextTranslations;
-        setBlockSourceText(block, value);
-        state.eligibleIds = eligibleTranslationIds(state.blocks, getConfig().translation);
-        renderToc(state);
-        await refreshBlockSection(state, block);
-        updateTranslationStatus(state);
+        const { needsTranslation } = await saveOriginalBlockText(state, block, value);
         setFooter(
           state,
           needsTranslation
@@ -1162,7 +1239,7 @@ function showBlockContextMenu(state, block, clientX, clientY) {
   const busy = state.translationBusy || state.translatingIds.has(block.id);
   const buttons = menu.querySelectorAll("button[data-action]");
   for (const button of buttons) {
-    button.disabled = busy && ["retranslate", "edit"].includes(button.dataset.action);
+    button.disabled = busy && ["retranslate", "reparse", "edit"].includes(button.dataset.action);
   }
   debugBlockContextMenu("buttons-ready", {
     blockId: block.id,
@@ -1451,21 +1528,13 @@ function showPdfBlockHighlight(state, block, attempt = 0) {
   highlight.className = "pt-pdf-locator-highlight";
   highlight.setAttribute("aria-hidden", "true");
 
-  const bbox = Array.isArray(block.bbox) ? block.bbox.map(Number) : [];
-  const pageSize = Array.isArray(block.pageSize) ? block.pageSize.map(Number) : [];
-  const [x1, y1, x2, y2] = bbox;
-  const [pageWidth, pageHeight] = pageSize;
-  const hasBox = [x1, y1, x2, y2, pageWidth, pageHeight].every(Number.isFinite)
-    && pageWidth > 0
-    && pageHeight > 0
-    && x2 > x1
-    && y2 > y1;
-
-  if (hasBox) {
-    const left = Math.max(0, Math.min(100, x1 / pageWidth * 100));
-    const top = Math.max(0, Math.min(100, y1 / pageHeight * 100));
-    const right = Math.max(left, Math.min(100, x2 / pageWidth * 100));
-    const bottom = Math.max(top, Math.min(100, y2 / pageHeight * 100));
+  const ratioRect = blockCropViewRect(block, 0);
+  if (ratioRect) {
+    const [leftRatio, topRatio, rightRatio, bottomRatio] = ratioRect;
+    const left = leftRatio * 100;
+    const top = topRatio * 100;
+    const right = rightRatio * 100;
+    const bottom = bottomRatio * 100;
     highlight.style.left = `${Math.max(0, left - 0.35)}%`;
     highlight.style.top = `${Math.max(0, top - 0.25)}%`;
     highlight.style.width = `${Math.max(1.2, Math.min(100 - left, right - left + 0.7))}%`;
@@ -2136,6 +2205,8 @@ function attachPanelEvents(state) {
       });
     } else if (action === "retranslate") {
       retranslateBlock(state, block);
+    } else if (action === "reparse") {
+      reparseBlock(state, block);
     } else if (action === "edit") {
       editBlockContent(state, block);
     } else if (action === "locate") {

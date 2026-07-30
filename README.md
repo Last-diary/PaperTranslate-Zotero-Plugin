@@ -82,8 +82,10 @@ Zotero → 设置 → PaperTranslate：
    - 「原文 / 译文」切换；译文模式会自动翻译当前屏幕附近尚未缓存的内容块；
    - 「翻译全文」对全文做增量翻译；
    - 点击内容块可定位并高亮 PDF；在 PDF 中右键可反向定位右侧内容；
-   - 内容块右键可复制、重新翻译、编辑内容或定位 PDF；没有译文的公式、代码等块会
-     直接编辑原文，编辑框随内容动态增长并限制最大高度；
+   - 内容块右键可复制、重新翻译、编辑内容或定位 PDF；原文页的文本类块还可选择
+     **重新解析**，插件会截取该块对应的 PDF 区域交给 MinerU，并按编辑原文的方式替换；
+     表格、图片和图表等结构化块暂不提供此操作；
+   - 没有译文的公式、代码等块会直接编辑原文，编辑框随内容动态增长并限制最大高度；
    - 打开面板和完成宽度拖拽后，插件会请求 Zotero Reader 重新执行 PDF 自动调整大小。
 
 ## 内容渲染
@@ -147,6 +149,7 @@ chrome/content/
       mathJax.mjs           每个 Reader 的 MathJax 加载、排版队列与清理
       markdownMath.mjs      Marked 数学 token 与公式分段
       panelRenderer.mjs     Marked、DOMPurify、公式保留与表格净化
+      pdfBlockCrop.mjs      PDF 块坐标转换与 Reader 截图兼容层
       actions.mjs           解析、解析后翻译等共享动作
       menu.mjs              条目右键菜单
       itemPane.mjs          条目信息面板
