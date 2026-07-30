@@ -6,6 +6,7 @@ import {
   MARKDOWN_SANITIZE_OPTIONS,
   TABLE_SANITIZE_OPTIONS,
   normalizeMathSource,
+  renderSourceHtmlToken,
   safeBlockTypeClass
 } from "../chrome/content/modules/ui/panelRenderer.mjs";
 import {
@@ -38,6 +39,31 @@ test("vendored Marked 18 parses GFM and preserves math tokens", () => {
   assert.match(output, /\$x_1\$/);
   assert.match(output, /<strong>bold<\/strong>/);
   assert.match(output, /<table>/);
+});
+
+test("unsupported source tags remain visible instead of becoming HTML", () => {
+  const marked = loadMarked();
+  const markdown = new marked.Marked({ breaks: true, gfm: true });
+  markdown.use({
+    extensions: [markdownMathExtension],
+    renderer: {
+      html(token) {
+        return renderSourceHtmlToken(token);
+      }
+    }
+  });
+
+  const inline = markdown.parse("before <search>term</search> after");
+  assert.match(inline, /before &lt;search&gt;term&lt;\/search&gt; after/);
+
+  const block = markdown.parse("<search>\nterm\n</search>");
+  assert.equal(block, "&lt;search&gt;\nterm\n&lt;/search&gt;");
+
+  const safeFormatting = markdown.parse("H<sub>2</sub>O");
+  assert.match(safeFormatting, /H<sub>2<\/sub>O/);
+
+  const activeContent = markdown.parse("<script>alert(1)</script>");
+  assert.equal(activeContent, "&lt;script&gt;alert(1)&lt;/script&gt;");
 });
 
 test("math segmentation ignores currency-like and escaped dollars", () => {

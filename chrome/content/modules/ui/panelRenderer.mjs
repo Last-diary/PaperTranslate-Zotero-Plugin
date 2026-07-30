@@ -69,6 +69,8 @@ export const TABLE_SANITIZE_OPTIONS = Object.freeze({
   KEEP_CONTENT: true
 });
 
+const SAFE_SOURCE_HTML_TAGS = new Set(MARKDOWN_SANITIZE_OPTIONS.ALLOWED_TAGS);
+
 function stripMathWrappers(content) {
   const trimmed = String(content || "").trim();
   const patterns = [
@@ -91,6 +93,24 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+// Marked 会把 <search> 等 HTML/类 XML 标签解析成原始 HTML token，而
+// DOMPurify 随后会移除白名单外的标签。未知标签在这里转义为可见文字；
+// 已明确允许的 Markdown HTML 仍交给 DOMPurify 做属性和协议净化。
+export function renderSourceHtmlToken(token) {
+  const raw = String(token?.raw ?? token?.text ?? "");
+  const tagNames = Array.from(
+    raw.matchAll(/<\s*\/?\s*([a-z][a-z0-9:-]*)\b/gi),
+    (match) => match[1].toLowerCase()
+  );
+  if (
+    tagNames.length
+    && tagNames.every((tagName) => SAFE_SOURCE_HTML_TAGS.has(tagName))
+  ) {
+    return raw;
+  }
+  return escapeHtml(raw);
 }
 
 export function normalizeMathSource(tex, displayMode = false) {
@@ -140,7 +160,14 @@ export function createPanelRenderer({
     breaks: true,
     gfm: true
   });
-  markdown.use({ extensions: [markdownMathExtension] });
+  markdown.use({
+    extensions: [markdownMathExtension],
+    renderer: {
+      html(token) {
+        return renderSourceHtmlToken(token);
+      }
+    }
+  });
 
   const sanitizeFragment = (html, options) => {
     const clean = purifier.sanitize(String(html || ""), {
