@@ -6,8 +6,8 @@ const RENDER_SCALE = 4;
 const MAX_COMPOSITE_REGIONS = 16;
 const MAX_COMPOSITE_DIMENSION = 16384;
 const MAX_COMPOSITE_PIXELS = 32_000_000;
-const COMPOSITE_GAP = 24;
-const IMPLEMENTATION_MARKER = "block-reparse-regions-v2";
+const COMPOSITE_GAP = 0;
+const IMPLEMENTATION_MARKER = "block-reparse-regions-v5-no-navigation";
 
 function finiteRect(values) {
   return Array.isArray(values)
@@ -210,39 +210,28 @@ function pageCanvas(doc, pageIndex) {
     || null;
 }
 
-async function waitForPageCanvas(reader, pageIndex, attempts = 40) {
-  try {
-    reader.navigate({ pageIndex });
-  } catch {
-    reader?._internalReader?.navigate?.({ pageIndex });
-  }
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const doc = readerPdfDocument(reader);
-    const canvas = pageCanvas(doc, pageIndex);
-    if (doc && canvas) return { doc, canvas };
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return null;
-}
-
-async function renderFromPageCanvas(reader, pageIndex, ratioRect) {
-  const source = await waitForPageCanvas(reader, pageIndex);
-  if (!source) throw new Error("目标 PDF 页面尚未完成渲染。");
+export function renderFromExistingPageCanvas(reader, pageIndex, ratioRect) {
+  // 只使用 Reader 当前已经渲染的 canvas。不要为了等待 canvas 主动
+  // reader.navigate()：Zotero 的 navigate({ pageIndex }) 最终会调用
+  // PDF.js scrollPageIntoView()，导致重新解析时左侧 PDF 发生可见滚动。
+  const doc = readerPdfDocument(reader);
+  const canvas = pageCanvas(doc, pageIndex);
+  if (!doc || !canvas) return null;
   const cropRect = ratioRectToCanvasRect(
     ratioRect,
-    source.canvas.width,
-    source.canvas.height
+    canvas.width,
+    canvas.height
   );
   if (!cropRect) throw new Error("当前块在 PDF 页面中的范围为空。");
   const [sourceX, sourceY, width, height] = cropRect;
-  const output = source.doc.createElement("canvas");
+  const output = doc.createElement("canvas");
   output.width = width;
   output.height = height;
   const context = output.getContext("2d", { alpha: false });
   if (!context) throw new Error("无法创建 PDF 块截图画布。");
   try {
     context.drawImage(
-      source.canvas,
+      canvas,
       sourceX,
       sourceY,
       width,
@@ -365,21 +354,22 @@ export async function renderBlockCrop(reader, block, { paddingRatio } = {}) {
   }
 
   // 与“点击右侧块定位 PDF”共用 pageIdx + bbox/pageSize 比例坐标。
-  // 优先直接裁切 Reader 已渲染的页面 canvas，避免跨 privileged/content
-  // compartment 取得不完整的 PDFPageProxy/PageViewport 方法对象。
+  // 仅在目标页 canvas 已存在时直接裁切；页面尚未渲染时立即进入下面的
+  // 离屏渲染链路，避免通过 navigate() 强制页面可见并改变用户视口。
   try {
-    const image = await renderFromPageCanvas(reader, pageIndex, ratioRect);
+    const image = renderFromExistingPageCanvas(reader, pageIndex, ratioRect);
     if (image) {
-      debug("used located PDF page canvas");
+      debug("used existing PDF page canvas without navigation");
       return image;
     }
   } catch (error) {
-    debug(`page canvas crop unavailable at runtime: ${error.message || error}`);
+    debug(`existing page canvas crop unavailable at runtime: ${error.message || error}`);
   }
 
   // Zotero 没有公开 PDF 区域裁图 API。把私有访问集中在这里并逐级做
-  // 能力检测：新版 Reader 的区域裁图、9.0.x 的批注裁图、最后直接
-  // 使用 Reader 自带的 PDF.js 页面对象渲染。
+  // 能力检测：官方 Reader 内部的区域裁图、旧版批注裁图、最后直接
+  // 使用 Reader 自带的 PDF.js 页面对象离屏渲染。三条路径都通过
+  // pdfDocument.getPage() 取得页面，不要求改变可见页或滚动位置。
   const internalReader = reader?._internalReader;
   const pdfView = internalReader?._primaryView;
   await pdfView?.initializedPromise;

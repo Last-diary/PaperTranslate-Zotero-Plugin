@@ -5,18 +5,19 @@ import {
   blockCropViewRect,
   compositeCanvasSize,
   ratioRectToCanvasRect,
+  renderFromExistingPageCanvas,
   resolvePdfPageContext,
   viewRatioRectToPdfRect
 } from "../chrome/content/modules/ui/pdfBlockCrop.mjs";
 
-test("multiple crop images keep reading order in a bounded vertical canvas", () => {
+test("multiple crop images keep reading order without an artificial gap", () => {
   assert.deepEqual(
     compositeCanvasSize([[100, 200], [80, 100]]),
     {
       width: 100,
-      height: 324,
+      height: 300,
       scale: 1,
-      gap: 24
+      gap: 0
     }
   );
   const bounded = compositeCanvasSize(
@@ -41,6 +42,16 @@ test("block crop rect is normalized, padded, and clamped", () => {
       pageSize: [1000, 1000]
     }),
     [0, 0, 1, 1]
+  );
+});
+
+test("zero padding preserves the original MinerU block bounds", () => {
+  assert.deepEqual(
+    blockCropViewRect({
+      bbox: [100, 200, 300, 400],
+      pageSize: [1000, 1000]
+    }, 0),
+    [0.1, 0.2, 0.3, 0.4]
   );
 });
 
@@ -69,6 +80,94 @@ test("block ratios map to the same PDF page canvas range used by block locating"
     [100, 400, 200, 400]
   );
   assert.equal(ratioRectToCanvasRect([0.2, 0.2, 0.2, 0.4], 100, 100), null);
+});
+
+test("existing page canvas crop never navigates or scrolls the Reader", () => {
+  let navigateCalls = 0;
+  let drawnSource = null;
+  const sourceCanvas = { width: 1000, height: 2000 };
+  const outputCanvas = {
+    width: 0,
+    height: 0,
+    getContext() {
+      return {
+        drawImage(source) {
+          drawnSource = source;
+        }
+      };
+    },
+    toDataURL() {
+      return "data:image/png;base64,crop";
+    }
+  };
+  const page = {
+    querySelectorAll() {
+      return [sourceCanvas];
+    }
+  };
+  const doc = {
+    getElementById() {
+      return {};
+    },
+    querySelector() {
+      return page;
+    },
+    createElement(tag) {
+      assert.equal(tag, "canvas");
+      return outputCanvas;
+    }
+  };
+  const reader = {
+    navigate() {
+      navigateCalls += 1;
+      throw new Error("crop must not navigate");
+    },
+    _internalReader: {
+      _primaryView: {
+        _iframeWindow: { document: doc }
+      }
+    }
+  };
+
+  const image = renderFromExistingPageCanvas(
+    reader,
+    0,
+    [0.1, 0.2, 0.3, 0.4]
+  );
+
+  assert.equal(image, "data:image/png;base64,crop");
+  assert.equal(navigateCalls, 0);
+  assert.equal(drawnSource, sourceCanvas);
+  assert.deepEqual([outputCanvas.width, outputCanvas.height], [0, 0]);
+});
+
+test("missing page canvas falls through without navigating", () => {
+  let navigateCalls = 0;
+  const reader = {
+    navigate() {
+      navigateCalls += 1;
+    },
+    _internalReader: {
+      _primaryView: {
+        _iframeWindow: {
+          document: {
+            getElementById() {
+              return {};
+            },
+            querySelector() {
+              return null;
+            }
+          }
+        }
+      }
+    }
+  };
+
+  assert.equal(
+    renderFromExistingPageCanvas(reader, 4, [0.1, 0.2, 0.3, 0.4]),
+    null
+  );
+  assert.equal(navigateCalls, 0);
 });
 
 test("page context falls back to the Reader page viewport when getPage lacks methods", async () => {
