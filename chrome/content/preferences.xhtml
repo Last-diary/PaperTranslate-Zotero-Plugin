@@ -4,6 +4,9 @@
 
   <groupbox aria-labelledby="papertranslate-preferences-reading-title">
     <label><html:h2 id="papertranslate-preferences-reading-title">阅读</html:h2></label>
+    <description>
+      阅读设置会在重新打开或重新加载 Reader 面板后生效。
+    </description>
 
     <hbox align="center">
       <label value="对齐方式" control="papertranslate-preferences-text-align"/>
@@ -34,15 +37,9 @@
       </menulist>
     </hbox>
 
-    <checkbox label="更好的阅读体验"
+    <checkbox label="更好的阅读体验（隐藏页眉、页脚、页码、脚注等非正文信息，默认开启）"
               preference="extensions.papertranslate.reading.betterReading"
               native="true"/>
-    <description>
-      隐藏页眉、页脚、页码、脚注等非正文信息（默认开启）。
-    </description>
-    <description>
-      阅读设置会在重新打开或重新加载 Reader 面板后生效。
-    </description>
   </groupbox>
 
   <groupbox aria-labelledby="papertranslate-preferences-translation-title">
