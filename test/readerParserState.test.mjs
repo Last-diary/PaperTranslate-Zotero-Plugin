@@ -97,3 +97,17 @@ test("Reader styles force hidden parser actions out of layout", () => {
     /\.pt-parser-action\[hidden\]\s*\{\s*display:none !important;\s*\}/
   );
 });
+
+test("Reader styles justify only paragraphs and list items with Gecko CJK spacing", () => {
+  assert.match(
+    READER_PANEL_CSS,
+    /\.pt-block p,\s*\.pt-block li \{\s*text-align:var\(--pt-reading-text-align\);\s*text-justify:inter-character;\s*\}/
+  );
+  assert.doesNotMatch(READER_PANEL_CSS, /inter-ideograph/);
+  assert.match(READER_PANEL_CSS, /\.pt-heading \{[^}]*text-align:left/);
+  assert.match(READER_PANEL_CSS, /\.pt-block pre \{[^}]*text-align:left/);
+  assert.doesNotMatch(
+    READER_PANEL_CSS,
+    /\.pt-markdown-view \{[^}]*text-align:justify/
+  );
+});

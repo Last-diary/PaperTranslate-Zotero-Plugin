@@ -353,12 +353,12 @@ function applyReadingPreferences(state, reading) {
   };
   state.els.root.style.setProperty("--pt-reading-font-size", `${safeFontSize}px`);
   state.els.root.style.setProperty("--pt-reading-text-align", textAlign);
-  // 同时写到正文容器，避免 Reader 内嵌文档的旧样式或紧凑布局规则
-  // 覆盖根节点上的 CSS 变量。重新加载面板时始终以当前偏好为准。
+  // 字号写到正文容器，避免 Reader 内嵌文档或紧凑布局覆盖 CSS 变量。
+  // 对齐只通过变量作用到 p/li，不写在整栏上，避免标题和代码被拉开。
   state.els.body.style.setProperty("font-size", `${safeFontSize}px`, "important");
-  state.els.body.style.setProperty("text-align", textAlign);
+  state.els.body.style.removeProperty("text-align");
   ctx.Zotero?.debug?.(
-    `[PaperTranslate][reading-prefs-v2] fontSize=${safeFontSize}px textAlign=${textAlign}`
+    `[PaperTranslate][reading-prefs-v3] fontSize=${safeFontSize}px textAlign=${textAlign}`
   );
 }
 
