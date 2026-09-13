@@ -2,10 +2,13 @@
 // 差异：不再使用 Node Buffer；OSS 上传直接发送 Uint8Array；轮询支持插件卸载时中止。
 
 import { sleep } from "./utils.mjs";
+import { ctx } from "./context.mjs";
+import { MINERU_FILES_PER_MINUTE, mineruRateLimitFor } from "./mineruRateLimit.mjs";
 
 export class MineruClient {
-  constructor(config) {
+  constructor(config, { rateLimit } = {}) {
     this.config = config;
+    this.rateLimit = rateLimit || mineruRateLimitFor(config.mineru);
   }
 
   get settings() {
@@ -27,16 +30,20 @@ export class MineruClient {
     };
   }
 
-  async fetch(pathname, options = {}, retries = 2) {
+  async fetch(pathname, options = {}, retries = 2, control = {}) {
     this.requireKey();
     let lastError = null;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
-      if (attempt > 0) {
+      if (attempt > 0 && lastError?.status !== 429) {
         const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
         await sleep(delay);
       }
 
+      await this.rateLimit.acquire(control.fileCount || 0, {
+        ...control,
+        shouldAbort: () => ctx.shuttingDown || Boolean(control.shouldAbort?.())
+      });
       try {
         const response = await fetch(`${this.settings.baseUrl}${pathname}`, {
           ...options,
@@ -48,6 +55,13 @@ export class MineruClient {
           }
         });
         const text = await response.text();
+
+        if (response.status === 429) {
+          this.rateLimit.defer(response.headers.get("retry-after"));
+          lastError = new Error(`MinerU 请求受限：429 ${text.slice(0, 300)}`);
+          lastError.status = 429;
+          continue;
+        }
 
         if (text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
           const wafError = new Error(`MinerU 访问被拦截（${response.status}），可能是网络防护触发，请稍后重试。`);
@@ -86,30 +100,61 @@ export class MineruClient {
     throw lastError || new Error("MinerU 请求失败，已达最大重试次数。");
   }
 
-  async createUploadBatch({ name, dataId }) {
+  async createUploadBatch({ name, dataId }, control = {}) {
+    return this.createUploadBatchFiles([{ name, dataId }], control);
+  }
+
+  async createUploadBatchFiles(files, control = {}) {
+    const entries = Array.from(files || []);
+    if (!entries.length || entries.length > MINERU_FILES_PER_MINUTE) {
+      throw new Error(`MinerU 单批上传文件数必须在 1 到 ${MINERU_FILES_PER_MINUTE} 之间。`);
+    }
     return this.fetch("/file-urls/batch", {
       method: "POST",
       body: JSON.stringify({
-        files: [{ name, data_id: dataId, is_ocr: this.settings.isOcr }],
+        files: entries.map(({ name, dataId }) => ({
+          name,
+          data_id: dataId,
+          is_ocr: this.settings.isOcr
+        })),
         ...this.payloadOptions()
       })
-    });
+    }, 2, { ...control, fileCount: entries.length });
   }
 
-  async pollBatch(batchId, fileName, shouldAbort = () => false) {
+  async pollBatchResults(batchId, expectedFiles, shouldAbort = () => false) {
+    const expected = Array.from(expectedFiles || []).map((entry) => ({
+      name: String(entry?.name || ""),
+      dataId: String(entry?.dataId || "")
+    }));
+    if (!batchId || !expected.length) {
+      throw new Error("MinerU 批量轮询缺少任务或文件信息。");
+    }
     const started = Date.now();
     while (Date.now() - started < this.settings.timeoutMs) {
-      if (shouldAbort()) throw new Error("操作已取消（插件已停用）。");
-      const data = await this.fetch(`/extract-results/batch/${encodeURIComponent(batchId)}`);
+      if (shouldAbort()) throw new Error("操作已取消。");
+      const data = await this.fetch(`/extract-results/batch/${encodeURIComponent(batchId)}`, {}, 2, { shouldAbort });
       const results = Array.isArray(data.extract_result) ? data.extract_result : [];
-      const result = results.find((item) => item.file_name === fileName) || results[0];
-      if (result?.state === "done" && result.full_zip_url) return result;
-      if (result?.state === "failed") {
-        throw new Error(`MinerU 解析失败：${result.err_msg || "unknown error"}`);
+      const matched = expected.map((entry) => results.find((item) => (
+        (entry.dataId && item?.data_id === entry.dataId)
+        || (entry.name && item?.file_name === entry.name)
+      )) || null);
+      if (matched.every((item) => item && ["done", "failed"].includes(item.state))) {
+        return expected.map((entry, index) => ({ ...entry, result: matched[index] }));
       }
       await sleep(this.settings.pollIntervalMs);
     }
-    throw new Error("MinerU 解析超时。");
+    throw new Error("MinerU 批量解析超时。");
+  }
+
+  async pollBatch(batchId, fileName, shouldAbort = () => false) {
+    const [{ result }] = await this.pollBatchResults(
+      batchId,
+      [{ name: fileName, dataId: "" }],
+      shouldAbort
+    );
+    if (result?.state === "done" && result.full_zip_url) return result;
+    throw new Error(`MinerU 解析失败：${result?.err_msg || "unknown error"}`);
   }
 }
 

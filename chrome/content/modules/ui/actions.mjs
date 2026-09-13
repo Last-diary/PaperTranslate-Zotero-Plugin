@@ -4,6 +4,7 @@ import { ctx } from "../context.mjs";
 import { importAttachment } from "../importer.mjs";
 import { TranslationService } from "../deepseek.mjs";
 import { loadBlocks } from "../blocks.mjs";
+import { runDocumentReparse } from "../documentReparse.mjs";
 import * as storage from "../storage.mjs";
 import { runWithProgress } from "./progress.mjs";
 
@@ -130,6 +131,25 @@ export async function parseAndTranslateAttachment(attachment, { force = false } 
         : "解析完成，没有需要翻译的内容。";
     }
     return `解析并翻译完成：本次翻译 ${result.translated} 段。`;
+  });
+}
+
+export async function reparseDocumentBlocks(attachment, { restart = false } = {}) {
+  return runWithProgress("强制重解析全部块", async (update) => {
+    const result = await runDocumentReparse(attachment, {
+      restart,
+      onProgress: update
+    });
+    if (!result.submitted && result.priorSucceeded) {
+      return `已有 ${result.priorSucceeded} 个块成功完成，没有未完成块。`;
+    }
+    return [
+      `完成：实际消耗 ${result.submitted} 个块`,
+      `成功 ${result.success}`,
+      `替换 ${result.changed}`,
+      `失败 ${result.failed}`,
+      `跳过 ${result.skipped}`
+    ].join("；");
   });
 }
 

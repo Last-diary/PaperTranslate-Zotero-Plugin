@@ -18,6 +18,10 @@ import { TranslationService, eligibleTranslationIds } from "../deepseek.mjs";
 import { TocEnhancer } from "../toc.mjs";
 import { escapeHtml } from "../utils.mjs";
 import { importAttachment } from "../importer.mjs";
+import {
+  onPaperDataBusyCheck,
+  onPaperDataChanged
+} from "../paperDataEvents.mjs";
 import { READER_PANEL_CSS } from "../readerPanelStyles.mjs";
 import {
   blockSourceText,
@@ -867,9 +871,17 @@ function detachPanel(state) {
     state.win.clearTimeout(state.sourceRetranslateTimer);
     state.sourceRetranslateTimer = null;
   }
+  if (state.externalReloadTimer) {
+    state.win.clearTimeout(state.externalReloadTimer);
+    state.externalReloadTimer = null;
+  }
   state.autoTranslateQueued.clear();
   state.eventCleanup?.();
   state.eventCleanup = null;
+  state.dataChangeCleanup?.();
+  state.dataChangeCleanup = null;
+  state.dataBusyCleanup?.();
+  state.dataBusyCleanup = null;
   state.resizeCleanup?.();
   state.resizeCleanup = null;
   if (state.layoutMode === "sibling-side-by-side") {
@@ -2555,6 +2567,10 @@ async function togglePanel(reader) {
     imageSources: new Map(),
     disposed: false,
     eventCleanup: null,
+    dataChangeCleanup: null,
+    dataBusyCleanup: null,
+    externalReloadTimer: null,
+    documentReparseBusy: false,
     translationBusy: false,
     autoTranslateTimer: null,
     autoTranslateFailed: false,
@@ -2577,6 +2593,36 @@ async function togglePanel(reader) {
     pdfHighlightNodes: []
   };
   state.mathJax = createMathJaxController(win);
+  state.dataBusyCleanup = onPaperDataBusyCheck(({ attachmentID }) => (
+    !state.disposed
+    && attachmentID === state.reader.itemID
+    && (state.translationBusy || state.translatingIds.size > 0)
+  ));
+  state.dataChangeCleanup = onPaperDataChanged(({ attachmentID, reason }) => {
+    if (state.disposed || attachmentID !== state.reader.itemID) return;
+    if (reason === "document-reparse-start") {
+      state.documentReparseBusy = true;
+      state.translationBusy = true;
+      state.els.translateBtn.disabled = true;
+      setFooter(state, "正在后台强制重解析全部块…");
+      return;
+    }
+    if (reason !== "document-reparse-end") return;
+    state.documentReparseBusy = false;
+    state.translationBusy = false;
+    state.els.translateBtn.disabled = false;
+    const reloadWhenIdle = () => {
+      state.externalReloadTimer = null;
+      if (state.disposed) return;
+      if (state.translationBusy || state.translatingIds.size) {
+        state.externalReloadTimer = state.win.setTimeout(reloadWhenIdle, 500);
+        return;
+      }
+      reloadPanel(state).catch((error) => ctx.Zotero.logError(error));
+    };
+    if (state.externalReloadTimer) state.win.clearTimeout(state.externalReloadTimer);
+    state.externalReloadTimer = state.win.setTimeout(reloadWhenIdle, 0);
+  });
   panelStates.set(win, state);
   activePanelStates.add(state);
   attachSideBySide(state);

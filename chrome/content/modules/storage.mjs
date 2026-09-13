@@ -72,6 +72,10 @@ export function blockRegionsPath(dir) {
   return PathUtils.join(dir, ".papertranslate-block-regions.json");
 }
 
+export function documentReparsePath(dir) {
+  return PathUtils.join(dir, ".papertranslate-document-reparse.json");
+}
+
 export async function ensureDir(dir) {
   await IOUtils.makeDirectory(dir, { createAncestors: true });
 }

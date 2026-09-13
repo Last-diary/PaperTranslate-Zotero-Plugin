@@ -57,7 +57,9 @@ export async function reparseBlockImage({
 
   assertActive(shouldAbort);
   onProgress("申请 MinerU 上传链接…");
-  const upload = await mineru.createUploadBatch({ name: uploadName, dataId: identity });
+  const upload = await mineru.createUploadBatch({ name: uploadName, dataId: identity }, {
+    shouldAbort, onProgress
+  });
   const batchId = upload.batch_id;
   const uploadUrl = Array.isArray(upload.file_urls) ? upload.file_urls[0] : "";
   if (!batchId || !uploadUrl) throw new Error("MinerU 未返回上传链接。");
@@ -76,6 +78,22 @@ export async function reparseBlockImage({
 
   assertActive(shouldAbort);
   onProgress("下载并读取重新解析结果…");
+  return replacementTextFromMineruResult({
+    attachment,
+    block,
+    result,
+    shouldAbort
+  });
+}
+
+export async function replacementTextFromMineruResult({
+  attachment,
+  block,
+  result,
+  shouldAbort = () => false
+} = {}) {
+  if (!result?.full_zip_url) throw new Error("MinerU 未返回解析结果 ZIP。");
+  assertActive(shouldAbort);
   const response = await fetch(result.full_zip_url);
   if (!response.ok) throw new Error(`下载解析结果失败：${response.status}`);
   const zipBytes = new Uint8Array(await response.arrayBuffer());

@@ -208,3 +208,50 @@ test("page context prefers a full PDFPageProxy viewport", async () => {
   assert.equal(result.page, page);
   assert.equal(result.viewport, pageViewport);
 });
+
+test("a viewport with methods but NaN dimensions falls back to the viewer viewport", async () => {
+  const viewport = { width: 612, height: 792, convertToPdfPoint: (x, y) => [x, 792 - y] };
+  const page = { getViewport: () => ({ ...viewport, width: NaN, height: NaN }) };
+  const result = await resolvePdfPageContext(
+    { getPageView: () => ({ pdfPage: page, viewport }) }, {}, 0
+  );
+  assert.equal(result.viewport, viewport);
+  assert.deepEqual(viewRatioRectToPdfRect(result.viewport, [0, 0, 1, 1]), [0, 0, 612, 792]);
+});
+
+test("invalid page and viewer viewports fail safely", async () => {
+  const invalid = { width: Infinity, height: 0, convertToPdfPoint: () => [NaN, NaN] };
+  const result = await resolvePdfPageContext(
+    { getPageView: () => ({ pdfPage: { getViewport: () => invalid }, viewport: invalid }) }, {}, 0
+  );
+  assert.equal(result.viewport, null);
+});
+
+test("PDF.js viewport options are cloned into the supplied Reader realm", async () => {
+  const originalCu = globalThis.Cu;
+  const readerWindow = {};
+  const cloned = new WeakSet();
+  const viewport = { width: 612, height: 792, convertToPdfPoint: (x, y) => [x, 792 - y] };
+  globalThis.Cu = {
+    cloneInto(value, target) {
+      assert.equal(target, readerWindow);
+      const copy = { ...value };
+      cloned.add(copy);
+      return copy;
+    }
+  };
+  try {
+    const page = { getViewport(options) {
+      assert.ok(cloned.has(options), "privileged options must not reach PDF.js directly");
+      assert.equal(options.scale, 1);
+      return viewport;
+    } };
+    const result = await resolvePdfPageContext(
+      { getPageView: () => ({ pdfPage: page }) }, {}, 0, readerWindow
+    );
+    assert.equal(result.viewport, viewport);
+  } finally {
+    if (originalCu === undefined) delete globalThis.Cu;
+    else globalThis.Cu = originalCu;
+  }
+});

@@ -6,9 +6,11 @@ import {
   resolvePdfAttachment,
   parseAttachment,
   parseAndTranslateAttachment,
+  reparseDocumentBlocks,
   clearAttachmentsTranslationCaches,
   clearAttachmentsPaperTranslateData
 } from "./actions.mjs";
+import { getDocumentReparseInfo } from "../documentReparse.mjs";
 
 const menuIDs = [];
 const fallbackMenus = new Map();
@@ -58,6 +60,61 @@ function confirmClearAttachment({ title, text, buttonLabel }) {
   ) === 0;
 }
 
+function confirmDocumentReparse(attachment, info) {
+  const prompt = Services.prompt;
+  const { plan } = info;
+  const title = `强制重新解析“${attachmentDisplayTitle(attachment)}”的全部可用块？`;
+  const consumption = plan.targets.length
+    ? `本次首轮预计消耗 ${plan.firstPassConsumption} 个块；失败块会自动重试一次，最多消耗 ${plan.maximumConsumption} 个块。`
+    : "上次任务中的可重解析块已全部成功，本次没有未完成块。";
+  const text = [
+    "仅当论文中大量块内容解析错误时才推荐使用此功能。",
+    `可重解析 ${plan.candidates.length} 个块；跳过表格、图片、图表或定位不可靠块 ${plan.skipped.length} 个；已成功并可跳过 ${plan.priorSucceeded} 个。`,
+    consumption,
+    "插件会在后台逐块截图并提交 MinerU，用新结果替换原文。内容发生变化的块会删除旧译文并等待重新翻译。操作无法直接撤销。"
+  ].join("\n\n");
+
+  if (plan.priorSucceeded && plan.targets.length) {
+    const flags = prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING
+      + prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING
+      + prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_CANCEL
+      + prompt.BUTTON_POS_2_DEFAULT;
+    const choice = prompt.confirmEx(
+      ctx.Zotero.getMainWindow?.() || null,
+      title,
+      text,
+      flags,
+      "继续未完成",
+      "全部重新开始",
+      null,
+      null,
+      {}
+    );
+    if (choice === 0) return { confirmed: true, restart: false };
+    if (choice === 1) return { confirmed: true, restart: true };
+    return { confirmed: false, restart: false };
+  }
+
+  const flags = prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING
+    + prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_CANCEL
+    + prompt.BUTTON_POS_1_DEFAULT;
+  const choice = prompt.confirmEx(
+    ctx.Zotero.getMainWindow?.() || null,
+    title,
+    text,
+    flags,
+    plan.targets.length ? "强制重解析并替换" : "全部重新开始",
+    null,
+    null,
+    null,
+    {}
+  );
+  return {
+    confirmed: choice === 0,
+    restart: !plan.targets.length
+  };
+}
+
 const COMMANDS = {
   parse(event, context) {
     const attachment = selectedPdfAttachment(context);
@@ -66,6 +123,16 @@ const COMMANDS = {
   parseAndTranslate(event, context) {
     const attachment = selectedPdfAttachment(context);
     if (attachment) parseAndTranslateAttachment(attachment);
+  },
+  async documentReparse(event, context) {
+    const attachments = selectedPdfAttachments(context);
+    if (attachments.length !== 1) return;
+    const attachment = attachments[0];
+    const info = await getDocumentReparseInfo(attachment);
+    if (!info) return;
+    const decision = confirmDocumentReparse(attachment, info);
+    if (!decision.confirmed) return;
+    void reparseDocumentBlocks(attachment, { restart: decision.restart });
   },
   clearTranslationCache(event, context) {
     const attachments = selectedPdfAttachments(context);
@@ -121,6 +188,16 @@ const MENU_DEFS = [
     onCommand: COMMANDS.parseAndTranslate
   },
   {
+    l10nID: "papertranslate-menu-force-reparse-blocks",
+    icon: "icons/parse-16.svg",
+    isVisible: async (context) => {
+      const attachments = selectedPdfAttachments(context);
+      if (attachments.length !== 1) return false;
+      return Boolean(await getDocumentReparseInfo(attachments[0]));
+    },
+    onCommand: COMMANDS.documentReparse
+  },
+  {
     l10nID: "papertranslate-menu-delete-translation-cache",
     icon: "icons/delete-translation-cache-16.svg",
     isVisible: (context) => selectedPdfAttachments(context).length > 0,
@@ -150,7 +227,23 @@ export function registerMenus(pluginID) {
         menuType: "menuitem",
         l10nID,
         ...(icon ? { icon: ctx.rootURI + icon } : {}),
-        onShowing: (event, context) => context.setVisible(isVisible(context)),
+        onShowing: (event, context) => {
+          try {
+            const result = isVisible(context);
+            if (result?.then) {
+              context.setVisible(false);
+              result.then(
+                (visible) => context.setVisible(Boolean(visible)),
+                (error) => ctx.Zotero.logError(error)
+              );
+            } else {
+              context.setVisible(Boolean(result));
+            }
+          } catch (error) {
+            context.setVisible(false);
+            ctx.Zotero.logError(error);
+          }
+        },
         onCommand
       }))
     });
@@ -192,12 +285,28 @@ export function installFallbackMenu(window) {
     entries.push({ node: item, isVisible });
   }
 
+  let showingGeneration = 0;
   const onShowing = () => {
+    const generation = ++showingGeneration;
     let anyVisible = false;
     for (const { node, isVisible } of entries) {
-      const visible = isVisible(null);
-      node.hidden = !visible;
-      if (node.localName === "menuitem" && visible) anyVisible = true;
+      try {
+        const result = isVisible(null);
+        if (result?.then) {
+          node.hidden = true;
+          result.then((visible) => {
+            if (generation !== showingGeneration) return;
+            node.hidden = !visible;
+            groupSeparator.hidden = !entries.some(({ node: entryNode }) => !entryNode.hidden);
+          }, (error) => ctx.Zotero.logError(error));
+        } else {
+          node.hidden = !result;
+          if (node.localName === "menuitem" && result) anyVisible = true;
+        }
+      } catch (error) {
+        node.hidden = true;
+        ctx.Zotero.logError(error);
+      }
     }
     groupSeparator.hidden = !anyVisible;
   };

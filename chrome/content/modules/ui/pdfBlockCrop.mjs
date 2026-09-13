@@ -7,7 +7,7 @@ const MAX_COMPOSITE_REGIONS = 16;
 const MAX_COMPOSITE_DIMENSION = 16384;
 const MAX_COMPOSITE_PIXELS = 32_000_000;
 const COMPOSITE_GAP = 0;
-const IMPLEMENTATION_MARKER = "block-reparse-regions-v5-no-navigation";
+const IMPLEMENTATION_MARKER = "block-reparse-regions-v7-reader-compartment";
 
 function finiteRect(values) {
   return Array.isArray(values)
@@ -156,7 +156,7 @@ async function composeCropImages(doc, dataUrls) {
 function cloneIntoReader(value, readerWindow) {
   try {
     return typeof Cu !== "undefined" && Cu.cloneInto
-      ? Cu.cloneInto(value, readerWindow)
+      ? Cu.cloneInto(value, readerWindow, { wrapReflectors: true })
       : value;
   } catch {
     return value;
@@ -174,7 +174,7 @@ function unwrapReaderObject(value) {
 }
 
 function debug(message) {
-  ctx.Zotero?.debug?.(`PaperTranslate ${IMPLEMENTATION_MARKER}: ${message}`);
+  ctx.Zotero?.debug?.(`PaperTranslate ${IMPLEMENTATION_MARKER} Zotero=${ctx.Zotero.version || "unknown"}: ${message}`);
 }
 
 function readerPdfDocument(reader) {
@@ -248,7 +248,13 @@ export function renderFromExistingPageCanvas(reader, pageIndex, ratioRect) {
   }
 }
 
-export async function resolvePdfPageContext(pdfViewer, pdfDocument, pageIndex) {
+function usableViewport(viewport) {
+  return typeof viewport?.convertToPdfPoint === "function"
+    && Number.isFinite(viewport.width) && viewport.width > 0
+    && Number.isFinite(viewport.height) && viewport.height > 0;
+}
+
+export async function resolvePdfPageContext(pdfViewer, pdfDocument, pageIndex, readerWindow = null) {
   const viewer = unwrapReaderObject(pdfViewer);
   const documentProxy = unwrapReaderObject(pdfDocument);
   let pageView = null;
@@ -257,7 +263,8 @@ export async function resolvePdfPageContext(pdfViewer, pdfDocument, pageIndex) {
       viewer?.getPageView?.(pageIndex)
       || viewer?._pages?.[pageIndex]
     );
-  } catch {
+  } catch (error) {
+    debug(`page=${pageIndex} getPageView failed: ${error.message || error}`);
     pageView = null;
   }
 
@@ -265,7 +272,8 @@ export async function resolvePdfPageContext(pdfViewer, pdfDocument, pageIndex) {
   if (typeof page?.getViewport !== "function" && documentProxy?.getPage) {
     try {
       page = unwrapReaderObject(await documentProxy.getPage(pageIndex + 1));
-    } catch {
+    } catch (error) {
+      debug(`page=${pageIndex} getPage failed: ${error.message || error}`);
       page = null;
     }
   }
@@ -273,17 +281,23 @@ export async function resolvePdfPageContext(pdfViewer, pdfDocument, pageIndex) {
   let viewport = null;
   if (typeof page?.getViewport === "function") {
     try {
-      viewport = unwrapReaderObject(page.getViewport({ scale: 1 }));
-    } catch {
+      // Zotero has no public crop API. PDF.js runs in the Reader content realm:
+      // on Zotero 9, an uncloned privileged options object produces NaN dimensions
+      // without throwing. Keep options in that realm, as Zotero's own renderer does.
+      const options = readerWindow ? cloneIntoReader({ scale: 1 }, readerWindow) : { scale: 1 };
+      viewport = unwrapReaderObject(page.getViewport(options));
+    } catch (error) {
+      debug(`page=${pageIndex} getViewport failed: ${error.message || error}`);
       viewport = null;
     }
   }
-  // 跨 privileged/content compartment 调用 getPage() 时，部分 Zotero
-  // 版本只返回序列化页面数据，没有 PDFPageProxy 方法。PDFViewer 的
-  // pageView.viewport 仍是 Reader 实际用于坐标转换的完整对象。
-  if (typeof viewport?.convertToPdfPoint !== "function") {
+  // A method can be present on an invalid viewport. Fall back to the viewport
+  // created by PDFViewer itself when either methods or finite dimensions are missing.
+  if (!usableViewport(viewport)) {
+    debug(`page=${pageIndex} invalid viewport ${viewport?.width}x${viewport?.height}; trying pageView.viewport`);
     viewport = unwrapReaderObject(pageView?.viewport);
   }
+  if (!usableViewport(viewport)) viewport = null;
   return { page, viewport };
 }
 
@@ -310,13 +324,13 @@ async function renderWithPdfJs(page, pdfView, pdfRect) {
   }
 
   let scale = RENDER_SCALE;
-  let viewport = page.getViewport({ scale });
+  let viewport = page.getViewport(cloneIntoReader({ scale }, readerWindow));
   let viewRect = pdfRectToViewportRect(viewport, pdfRect);
   const maxCanvasPixels = Number(pdfViewer?.maxCanvasPixels || 0);
   const canvasPixels = (viewRect[2] - viewRect[0]) * (viewRect[3] - viewRect[1]);
   if (maxCanvasPixels > 0 && canvasPixels > maxCanvasPixels) {
     scale *= Math.sqrt(maxCanvasPixels / canvasPixels);
-    viewport = page.getViewport({ scale });
+    viewport = page.getViewport(cloneIntoReader({ scale }, readerWindow));
     viewRect = pdfRectToViewportRect(viewport, pdfRect);
   }
 
@@ -326,11 +340,11 @@ async function renderWithPdfJs(page, pdfView, pdfRect) {
     throw new Error("当前块的 PDF 定位范围为空。");
   }
 
-  viewport = page.getViewport({
+  viewport = page.getViewport(cloneIntoReader({
     scale,
     offsetX: -viewRect[0],
     offsetY: -viewRect[1]
-  });
+  }, readerWindow));
   const canvas = readerWindow.document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -338,7 +352,7 @@ async function renderWithPdfJs(page, pdfView, pdfRect) {
   if (!context) throw new Error("无法创建 PDF 裁图画布。");
   context.skipBlender = true;
   try {
-    await page.render({ canvasContext: context, viewport }).promise;
+    await page.render(cloneIntoReader({ canvasContext: context, viewport }, readerWindow)).promise;
     return canvas.toDataURL("image/png", 1);
   } finally {
     canvas.width = 0;
@@ -386,7 +400,8 @@ export async function renderBlockCrop(reader, block, { paddingRatio } = {}) {
   const { page, viewport } = await resolvePdfPageContext(
     pdfViewer,
     pdfDocument,
-    pageIndex
+    pageIndex,
+    readerWindow
   );
   const pdfRect = viewRatioRectToPdfRect(viewport, ratioRect);
   if (!pdfRect) throw new Error("无法转换当前块的 PDF 定位坐标。");
