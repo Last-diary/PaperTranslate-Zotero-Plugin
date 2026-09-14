@@ -5,6 +5,16 @@
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
+$manifest = Get-Content -LiteralPath (Join-Path $root "manifest.json") -Raw | ConvertFrom-Json
+$version = $manifest.version
+$zotero = $manifest.applications.zotero
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+  throw "正式发布版本必须为 x.y.z：$version"
+}
+$releaseBase = "https://github.com/Last-diary/PaperTranslate-Zotero-Plugin/releases"
+if ($zotero.update_url -ne "$releaseBase/latest/download/updates.json") {
+  throw "manifest.json 的 update_url 与发布地址不一致"
+}
 $xpiPath = Join-Path $root "papertranslate.xpi"
 if (Test-Path $xpiPath) { Remove-Item $xpiPath -Force }
 
@@ -54,3 +64,23 @@ try {
 }
 
 Write-Host "Built: $xpiPath ($($files.Count) 个文件)"
+
+$hash = (Get-FileHash -LiteralPath $xpiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$addons = @{}
+$addons[$zotero.id] = @{
+  updates = @(@{
+    version = $version
+    update_link = "$releaseBase/download/v$version/papertranslate.xpi"
+    update_hash = "sha256:$hash"
+    applications = @{
+      zotero = @{
+        strict_min_version = $zotero.strict_min_version
+        strict_max_version = $zotero.strict_max_version
+      }
+    }
+  })
+}
+$updatesPath = Join-Path $root "updates.json"
+$json = @{ addons = $addons } | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($updatesPath, $json, [System.Text.UTF8Encoding]::new($false))
+Write-Host "Built: $updatesPath (version=$version, sha256=$hash)"

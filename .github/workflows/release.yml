@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release version
+        run: |
+          $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
+          if ($env:GITHUB_REF_NAME -cne "v$($manifest.version)") {
+            throw "Tag does not match manifest version"
+          }
+      - name: Run tests
+        run: |
+          $tests = Get-ChildItem ./test/*.test.mjs | ForEach-Object FullName
+          node --test $tests
+          if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
+      - name: Build XPI and update manifest
+        run: ./build.ps1
+      - name: Verify release artifacts
+        run: ./verify-release.ps1
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = @'
+          首次接入自动更新：0.5.0 及更早版本的用户需要手动安装一次 papertranslate.xpi，之后可通过 Zotero 插件管理器接收更新。
+
+          静态验证通过，仍需 Zotero 运行验证。
+          '@
+          $notes | Set-Content release-notes.md -Encoding utf8
+          gh release create $tag papertranslate.xpi updates.json --verify-tag --draft --title "PaperTranslate $tag" --notes-file release-notes.md --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "Draft release creation failed" }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }

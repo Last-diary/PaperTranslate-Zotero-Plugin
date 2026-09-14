@@ -11,7 +11,10 @@
 
 兼容 **Zotero 7 / 8 / 9**。
 
-## 当前版本：0.5.0
+## 当前版本：0.5.1
+
+- 接入 Zotero 内置自动更新；正式发布同时提供 XPI、更新清单和 SHA-256 校验值。
+- 新增 GitHub Actions 发布流程，推送与插件版本一致的正式版本标签即可测试、打包并发布。
 
 - Reader 内容渲染迁移到 **Marked 18 + DOMPurify 3.4.12**，支持 GFM、围栏代码、
   Markdown 表格和经过白名单净化的链接、表格与公式输出。
@@ -40,6 +43,10 @@
 从 [Releases](https://github.com/Last-diary/PaperTranslate-Zotero-Plugin/releases/latest)
 下载 `papertranslate.xpi`，然后进入 Zotero → 工具 → 插件（Plugins）→ 齿轮 →
 Install Add-on From File… 并选择下载的文件。
+
+**自动更新**：0.5.0 及更早版本使用了占位更新地址，需要手动安装一次 0.5.1
+或更新版本。之后在 Zotero 插件管理器中开启自动更新即可，也可手动点击“检查更新”。
+开发模式请继续使用 Git 更新源码；自动升级验证应使用通过 XPI 安装的插件。
 
 ### 方式二：开发模式（免打包）
 
@@ -172,10 +179,27 @@ build.ps1                   打包 XPI
 $tests = Get-ChildItem .\test\*.test.mjs | ForEach-Object FullName
 node --test $tests
 .\build.ps1
+.\verify-release.ps1
 ```
 
 测试覆盖 Markdown/公式分段、MathJax 配置和资源、代码围栏、内容块编辑与缓存清理决策。
 成功打包后，仓库根目录会生成 `papertranslate.xpi`。
+
+同时生成不入库的 `updates.json`，其中版本、兼容范围从 `manifest.json` 读取，
+下载地址固定到对应版本标签，并包含实际 XPI 的 SHA-256。
+
+### 发布正式版本
+
+1. 修改 `manifest.json` 的版本号（`x.y.z`）和本说明的当前版本；兼容范围须以实际验证为准。
+2. 提交并推送代码，再推送对应标签，例如 `v0.5.1`。
+3. `.github/workflows/release.yml` 自动检查版本、运行测试、打包，将 XPI 和更新清单
+   上传至草稿 Release，全部成功后公开为 Latest。不要将尚未发布的版本写入线上更新清单。
+4. 在 Zotero 中安装带有效更新地址的旧版本，点击“检查更新”，确认升级后的版本与功能。
+   构建成功不代表已完成 Zotero 运行验证。
+
+固定更新入口为：
+`https://github.com/Last-diary/PaperTranslate-Zotero-Plugin/releases/latest/download/updates.json`。
+每次正式发布都必须保留两个附件，且新版本号必须大于已发布版本。
 
 ## 注意
 

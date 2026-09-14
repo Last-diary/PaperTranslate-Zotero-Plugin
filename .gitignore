@@ -1,4 +1,5 @@
 *.xpi
+/updates.json
 *.log
 .references/
 
