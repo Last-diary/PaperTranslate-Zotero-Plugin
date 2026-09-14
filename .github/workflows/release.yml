@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, e.g. v0.5.1'
+        required: true
+        type: string
   push:
     tags:
       - 'v[0-9]*'
@@ -15,18 +21,22 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Check release version
         run: |
           $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
-          if ($env:GITHUB_REF_NAME -cne "v$($manifest.version)") {
+          if ($env:RELEASE_TAG -cne "v$($manifest.version)") {
             throw "Tag does not match manifest version"
           }
       - name: Run tests
@@ -42,7 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:RELEASE_TAG
           $notes = @'
           首次接入自动更新：0.5.0 及更早版本的用户需要手动安装一次 papertranslate.xpi，之后可通过 Zotero 插件管理器接收更新。
 
